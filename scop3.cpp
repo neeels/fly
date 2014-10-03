@@ -493,58 +493,8 @@ int H = 1080;
 
 SDL_Surface *screen = NULL;
 
-SDL_sem *please_render;
 SDL_sem *please_save;
-SDL_sem *rendering_done;
 SDL_sem *saving_done;
-
-int render_thread(void *arg) {
-
-  float want_frame_period = (want_fps > .1? 1000. / want_fps : 0);
-  float last_ticks = (float)SDL_GetTicks() - want_frame_period;
-
-  for (;;) {
-
-    SDL_SemWait(please_render);
-    if (! running)
-      break;
-
-    while (want_frame_period) {
-      int elapsed = SDL_GetTicks() - last_ticks;
-      if (elapsed >= want_frame_period) {
-        last_ticks += want_frame_period * (int)(elapsed / want_frame_period);
-        break;
-      }
-      SDL_Delay((int)want_frame_period - elapsed);
-    }
-
-    if (out_stream) {
-      SDL_SemWait(saving_done);
-    }
-
-    draw_scene();
-
-    int t = SDL_GetTicks();
-
-    if (out_stream) {
-      SDL_SemPost(please_save);
-    }
-
-    frames_rendered ++;
-    SDL_SemPost(rendering_done);
-
-    {
-      static int last_ticks2 = 0;
-      int elapsed = t - last_ticks2;
-      last_ticks2 = t;
-      avg_frame_period -= avg_frame_period >>AVG_SHIFTING;
-      avg_frame_period += elapsed;
-    }
-
-  }
-
-  return 0;
-}
 
 int save_thread(void *arg) {
 
@@ -576,7 +526,7 @@ void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
       animation.fold_speed = (axis_val*axis_val*axis_val) / 30;
       break;
     case 7:
-      animation.dragon_r_change = axis_val / 20;
+      animation.dragon_r_change = -axis_val / 20;
       break;
     case 3:
       {
@@ -799,21 +749,41 @@ int main(int argc, char *argv[])
   double want_alpha = 0;
   */
 
-  please_render = SDL_CreateSemaphore(0);
   please_save = SDL_CreateSemaphore(0);
-  rendering_done = SDL_CreateSemaphore(0);
   saving_done = SDL_CreateSemaphore(1);
 
-  SDL_Thread *render_thread_token = SDL_CreateThread(render_thread, NULL);
   SDL_Thread *save_thread_token = NULL;
   if (out_stream)
     SDL_CreateThread(save_thread, NULL);
+
+  float want_frame_period = (want_fps > .1? 1000. / want_fps : 0);
+  float last_ticks = (float)SDL_GetTicks() - want_frame_period;
 
   while (running)
   {
     animation.step();
 
-    SDL_SemPost(please_render);
+    if (out_stream) {
+      SDL_SemWait(saving_done);
+    }
+
+    draw_scene();
+    frames_rendered ++;
+
+    {
+      static int last_ticks2 = 0;
+
+      int t = SDL_GetTicks();
+      int elapsed = t - last_ticks2;
+      last_ticks2 = t;
+
+      avg_frame_period -= avg_frame_period >>AVG_SHIFTING;
+      avg_frame_period += elapsed;
+    }
+
+    if (out_stream) {
+      SDL_SemPost(please_save);
+    }
 
     while (running) {
       SDL_Event event;
@@ -849,33 +819,31 @@ int main(int argc, char *argv[])
         }
       } // while sdl poll event
 
-      if (SDL_SemTryWait(rendering_done) == 0)
-        break;
-      else
-        SDL_Delay(5);
+      if (want_frame_period) {
+        int elapsed = SDL_GetTicks() - last_ticks;
+        if (elapsed >= want_frame_period) {
+          last_ticks += want_frame_period * (int)(elapsed / want_frame_period);
+          break;
+        }
+        SDL_Delay(min((int)want_frame_period - elapsed, 5));
+      }
+
     } // while running, for event polling / idle waiting
 
   } // while running
 
   running = false;
 
-  // make sure threads exit.
-  SDL_SemPost(please_render);
-  SDL_SemPost(please_render);
   if (out_stream) {
     SDL_SemPost(please_save);
     SDL_SemPost(please_save);
   }
-  printf("waiting for render thread...\n");
-  SDL_WaitThread(render_thread_token, NULL);
   if (out_stream) {
     printf("waiting for save thread...\n");
     SDL_WaitThread(save_thread_token, NULL);
   }
 
-  SDL_DestroySemaphore(please_render);
   SDL_DestroySemaphore(please_save);
-  SDL_DestroySemaphore(rendering_done);
   SDL_DestroySemaphore(saving_done);
 
   return 0;
