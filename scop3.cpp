@@ -11,6 +11,8 @@
 #include <vector>
 using namespace std;
 
+#include "ctrl_layers.h"
+
 void Dessiner();
 
 bool running = true;
@@ -279,6 +281,110 @@ Dragon dragon3;
 
 double vision = 0;
 
+class Param {
+  public:
+    double val;
+    double want_val;
+
+    double slew;
+
+    Param(double val = 0, double slew=0.5){
+      this->val = known_want_val = want_val = val;
+      this->slew = slew;
+    }
+
+    Param& operator=(double v) {
+      if (v != want_val) {
+        want_val = v;
+      }
+    }
+
+    void step() {
+      val = slew * val + (1. - slew) * want_val;
+    }
+
+    bool changed() {
+      return known_want_val != want_val;
+    }
+
+    void change_handled() {
+      known_want_val = want_val;
+    }
+
+  private:
+    double known_want_val;
+};
+
+
+class Animation {
+  public:
+    Param rot_x;
+    Param rot_z;
+    Param fold_speed;
+    Param vision;
+    Param alpha;
+    Param dragon_points;
+    Param dragon_r_change;
+    Param dragon_r;
+    Param dragon_fold;
+    Param angleZ;
+    Param angleX;
+
+    Animation() {
+    }
+
+    void step() {
+      rot_x.step();
+      rot_z.step();
+      fold_speed.step();
+      vision.step();
+      alpha.step();
+      dragon_points.step();
+
+      angleZ += rot_z;
+      angleX += rot_x;
+      dragon_fold += fold_speed;
+      dragon_r += dragon_r_change;
+    }
+};
+
+Animation animation;
+
+
+void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
+  switch(axis)
+  {
+    case 1:
+      animation.rot_x = (axis_val*axis_val*axis_val) * 6;
+      break;
+    case 0:
+      animation.rot_z = (axis_val*axis_val*axis_val) * 6;
+      break;
+    case 4:
+      animation.fold_speed = (axis_val*axis_val*axis_val) / 30;
+      break;
+    case 7:
+      animation.dragon_r_change = axis_val / 20;
+      break;
+    case 3:
+      {
+        double dragon_points = (1. + axis_val)/2;
+        dragon_points *= dragon_points;
+        dragon_points = 1. + dragon_points * 240;
+        animation.dragon_points = dragon_points;
+      }
+      break;
+    case 5:
+      animation.vision = (1. + axis_val)/2;
+      break;
+    case 2:
+      animation.alpha = (1. + axis_val)/2;
+      break;
+    default:
+      break;
+  }
+}
+
 
 void Dessiner()
 {
@@ -380,7 +486,10 @@ int main(int argc, char *argv[])
   SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_JOYSTICK);
 
   const int n_joysticks = SDL_NumJoysticks();
+  controller_state_init(n_joysticks);
 
+
+  
   SDL_Joystick **joysticks = NULL;
 
   if (n_joysticks) {
@@ -405,7 +514,7 @@ int main(int argc, char *argv[])
   }
 
   atexit(SDL_Quit);
-  SDL_WM_SetCaption("SDL GL Application", NULL);
+  SDL_WM_SetCaption("SCOP3", NULL);
   int w = 1920;
   int h = 1080;
   SDL_SetVideoMode(w,h, 32, SDL_OPENGL);
@@ -448,45 +557,12 @@ int main(int argc, char *argv[])
     {
       switch(event.type)
       {
-        case SDL_QUIT:
-          running = false;
+        default:
+          handle_joystick_events(event);
           break;
 
-        case SDL_JOYAXISMOTION:
-          if (event.jaxis.which < n_joysticks)
-          {
-            float axis_val = event.jaxis.value;
-            axis_val /= 32768;
-
-            switch(event.jaxis.axis)
-            {
-              case 1:
-                rot_x = (axis_val*axis_val*axis_val) * 6;
-                break;
-              case 0:
-                rot_z = (axis_val*axis_val*axis_val) * 6;
-                break;
-              case 4:
-                fold_speed = (axis_val*axis_val*axis_val) / 30;
-                break;
-              case 7:
-                dragon_r_change = axis_val / 20;
-                break;
-              case 3:
-                dragon_points = (1. + axis_val)/2;
-                dragon_points *= dragon_points;
-                dragon_points = 1. + dragon_points * 240;
-                break;
-              case 5:
-                want_vision = (1. + axis_val)/2;
-                break;
-              case 2:
-                want_alpha = (1. + axis_val)/2;
-                break;
-              default:
-                break;
-            }
-          }
+        case SDL_QUIT:
+          running = false;
           break;
 
         case SDL_KEYDOWN:
@@ -504,8 +580,8 @@ int main(int argc, char *argv[])
       }
     }
 
-    vision = .96 * vision + .04 * want_vision;
-    alpha = .9  * alpha + .1 * want_alpha;
+    animation.step();
+
     current_time = SDL_GetTicks();
     elapsed_time = current_time - last_time;
     last_time = current_time;
