@@ -4,6 +4,8 @@
 #include <GL/glu.h>
 #include <cstdlib>
 #include <limits.h>
+#include <time.h>
+#include <unistd.h>
 
 #include <math.h>
 #include <stdio.h>
@@ -13,11 +15,16 @@ using namespace std;
 
 #include "ctrl_layers.h"
 
-void Dessiner();
+#define Pf(V) printf(#V "=%f\n", (float)V)
+
+
+void draw_scene();
 
 bool running = true;
-double angleZ = 0;
-double angleX = 0;
+volatile int frames_rendered = 0;
+volatile int avg_frame_period = 0;
+#define AVG_SHIFTING 3
+float want_fps = 25;
 
 float frandom(void) {
   return (float)(random()) / INT_MAX;
@@ -81,7 +88,12 @@ class Point {
     Point() {
       set(0,0,0);
       c.random(.3, 1);
-    };
+    }
+
+    Point(double x, double y, double z) {
+      set(x, y, z);
+      c.random(.3, 1);
+    }
 
     void set(double x, double y, double z) {
       this->x = x;
@@ -137,6 +149,10 @@ class Point {
       ::glVertex3d(x, y, z);
     }
 
+    void glTranslated() {
+      ::glTranslated(x, y, z);
+    }
+
     void print() {
       printf("x%f y%f z%f\n", x, y, z);
     }
@@ -168,6 +184,10 @@ class Dragon {
     void update(double f_segments, double r, double fold, double alpha)
     {
       Point p;
+      Pf(f_segments);
+      Pf(r);
+      Pf(fold);
+      Pf(alpha);
 
       int n_segments = (int)ceil(f_segments);
       n_segments = max(1, n_segments);
@@ -206,6 +226,7 @@ class Dragon {
           a = max(a, (alpha - .5)*2);
         p.c.a = 1. - a;
         points1.push_back(p);
+        p.print();
       }
 
       p.set(0, 0, 0);
@@ -229,6 +250,7 @@ class Dragon {
           a = max(a, (alpha - .5)*2);
         p.c.a = 1. - a;
         points2.push_back(p);
+        p.print();
       }
       
     }
@@ -275,12 +297,6 @@ class Dragon {
 };
 
 
-Dragon dragon1;
-Dragon dragon2;
-Dragon dragon3;
-
-double vision = 0;
-
 class Param {
   public:
     double val;
@@ -288,19 +304,15 @@ class Param {
 
     double slew;
 
-    Param(double val = 0, double slew=0.5){
+    Param(double val = 0, double slew=0.95){
       this->val = known_want_val = want_val = val;
       this->slew = slew;
     }
 
-    Param& operator=(double v) {
-      if (v != want_val) {
-        want_val = v;
-      }
-    }
-
     void step() {
+      printf("step %f", val);
       val = slew * val + (1. - slew) * want_val;
+      printf(" --> %f", val);
     }
 
     bool changed() {
@@ -310,6 +322,29 @@ class Param {
     void change_handled() {
       known_want_val = want_val;
     }
+
+    Param& operator=(double v) {
+      want_val = v;
+      printf("assign want_val=%f\n", v);
+      return *this;
+    }
+
+    Param& operator=(Param &v) {
+      want_val = v.want_val;
+      printf("assign want_val=Param(%f)\n", v.want_val);
+      return *this;
+    }
+
+    Param& operator+=(Param &v) {
+      want_val += v.want_val;
+      return *this;
+    }
+
+    operator double() {
+      printf("returning %f\n", val);
+      return val;
+    }
+
 
   private:
     double known_want_val;
@@ -330,7 +365,23 @@ class Animation {
     Param angleZ;
     Param angleX;
 
-    Animation() {
+    vector<Dragon> dragons;
+
+    Animation(int n_dragons = 3) {
+      dragon_points = 3;
+      rot_x.slew = .9;
+      rot_z.slew = .9;
+      fold_speed.slew = .9;
+      vision.slew = .96;
+      alpha = 1;
+      dragon_r = .3;
+      dragon_fold = 1;
+
+      Dragon d;
+      for (int i = 0; i < n_dragons; i++) {
+        dragons.push_back(d);
+        dragons.back().update(dragon_points, dragon_r, dragon_fold, alpha);
+      }
     }
 
     void step() {
@@ -340,15 +391,176 @@ class Animation {
       vision.step();
       alpha.step();
       dragon_points.step();
+      dragon_r_change.step();
+      dragon_r.step();
+      dragon_fold.step();
+      angleZ.step();
+      angleX.step();
 
       angleZ += rot_z;
       angleX += rot_x;
       dragon_fold += fold_speed;
       dragon_r += dragon_r_change;
+      Pf(dragon_r);
+      Pf(dragon_fold);
+      Pf(alpha);
+      for (int i = 0; i < dragons.size(); i++) {
+        dragons[i].update(dragon_points, dragon_r, dragon_fold, alpha);
+      }
     }
 };
 
 Animation animation;
+
+
+
+void draw_scene()
+{
+  static double rotate_shift = 0;
+  rotate_shift += .003;
+
+  glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
+
+  glMatrixMode( GL_MODELVIEW );
+  glLoadIdentity( );
+
+  double vision = animation.vision;
+  gluLookAt(3,4,260 - vision*200,0,0,vision * vision * 60,0,0,1);
+
+  double sc = 1;
+
+  double angleZ = animation.angleZ;
+  double angleX = animation.angleX;
+
+  glScaled(sc, sc, sc);
+  glRotated(angleZ,0,1,0);
+  glRotated(angleX,1,0,0);
+
+  for (int i = 0; i < 100; i++) {
+    double dd = i * (1 + .4 * sin(rotate_shift * 1.23));
+    dd /= sc;
+    double d = dd * .33;
+
+    glPushMatrix();
+      glRotated(i * (16.789 + rotate_shift),1,sin(rotate_shift),.25 * cos(rotate_shift));
+      double sc2 = 1. - .01 * i;
+      glScaled(sc2,sc2,sc2);
+
+      dd /= sc2;
+      d /= sc2;
+
+      double z1, z2;
+      if (i & (int)1) {
+        z1 = -d;
+        z2 = dd;
+      }
+      else {
+        z1 = dd;
+        z2 = -d;
+      }
+
+      const int n_sphere_points = 4;
+      Point sphere_points[n_sphere_points] = {
+          Point(dd, 0., z1),
+          Point(-d, d, z1),
+          Point(-d, -d, z1),
+          Point(0, 0, z2)
+        };
+
+      for (int j = 0; j < n_sphere_points; j++) {
+        glPushMatrix();
+        sphere_points[j].glTranslated();
+        animation.dragons[j % animation.dragons.size()].draw();
+        glPopMatrix();
+      }
+
+    glPopMatrix();
+  }
+
+  glFlush();
+  SDL_GL_SwapBuffers();
+}
+
+
+FILE *out_stream = NULL;
+FILE *out_params = NULL;
+FILE *in_params = NULL;
+
+char *audio_path = NULL;
+
+int W = 1920;
+int H = 1080;
+
+SDL_Surface *screen = NULL;
+
+SDL_sem *please_render;
+SDL_sem *please_save;
+SDL_sem *rendering_done;
+SDL_sem *saving_done;
+
+int render_thread(void *arg) {
+
+  float want_frame_period = (want_fps > .1? 1000. / want_fps : 0);
+  float last_ticks = (float)SDL_GetTicks() - want_frame_period;
+
+  for (;;) {
+
+    SDL_SemWait(please_render);
+    if (! running)
+      break;
+
+    while (want_frame_period) {
+      int elapsed = SDL_GetTicks() - last_ticks;
+      if (elapsed >= want_frame_period) {
+        last_ticks += want_frame_period * (int)(elapsed / want_frame_period);
+        break;
+      }
+      SDL_Delay((int)want_frame_period - elapsed);
+    }
+
+    if (out_stream) {
+      SDL_SemWait(saving_done);
+    }
+
+    draw_scene();
+
+    int t = SDL_GetTicks();
+
+    if (out_stream) {
+      SDL_SemPost(please_save);
+    }
+
+    frames_rendered ++;
+    SDL_SemPost(rendering_done);
+
+    {
+      static int last_ticks2 = 0;
+      int elapsed = t - last_ticks2;
+      last_ticks2 = t;
+      avg_frame_period -= avg_frame_period >>AVG_SHIFTING;
+      avg_frame_period += elapsed;
+    }
+
+  }
+
+  return 0;
+}
+
+int save_thread(void *arg) {
+
+  for (;;) {
+    SDL_SemWait(please_save);
+    if (! running)
+      break;
+
+    if (out_stream) {
+      fwrite(screen->pixels, sizeof(Uint32), W * H, out_stream);
+    }
+    SDL_SemPost(saving_done);
+  }
+
+  return 0;
+}
 
 
 void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
@@ -385,102 +597,132 @@ void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
   }
 }
 
-
-void Dessiner()
-{
-  static double rotate_shift = 0;
-  rotate_shift += .003;
-
-  glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
-
-  glMatrixMode( GL_MODELVIEW );
-  glLoadIdentity( );
-
-  gluLookAt(3,4,260 - vision*200,0,0,vision * vision * 60,0,0,1);
-
-#if 0
-  glPushMatrix();
-  //glScaled(6,6,6);
-
-    glPushMatrix();
-      glRotated(angleZ,0,.0,1);
-      glRotated(angleX,1,1,0);
-      dragon1.draw();
-    glPopMatrix();
-
-    glPushMatrix();
-      glRotated(angleZ,0,0,1);
-      glRotated(angleX,0,1,0);
-      glTranslated(1, 0, 0);
-      dragon2.draw();
-    glPopMatrix();
-
-    glPushMatrix();
-      glRotated(angleZ,1,0,1);
-      glRotated(angleX,0,1,0);
-      glTranslated(-1, 0, 0);
-      dragon3.draw();
-    glPopMatrix();
-  glPopMatrix();
-#endif
-
-  double sc = 1;
-
-  glScaled(sc, sc, sc);
-  glRotated(angleZ,0,1,0);
-  glRotated(angleX,1,0,0);
-
-  for (int i = 0; i < 100; i++) {
-    double dd = i * (1 + .4 * sin(rotate_shift * 1.23));
-    dd /= sc;
-    double d = dd * .33;
-
-    glPushMatrix();
-      glRotated(i * (16.789 + rotate_shift),1,sin(rotate_shift),.25 * cos(rotate_shift));
-      double sc2 = 1. - .01 * i;
-      glScaled(sc2,sc2,sc2);
-
-      dd /= sc2;
-      d /= sc2;
-
-      double z1, z2;
-      if (i & (int)1) {
-        z1 = -d;
-        z2 = dd;
-      }
-      else {
-        z1 = dd;
-        z2 = -d;
-      }
-
-      glPushMatrix();
-      glTranslated(dd, 0, z1);
-      dragon1.draw();
-      glPopMatrix();
-
-      glPushMatrix();
-      glTranslated(-d, d, z1);
-      dragon2.draw();
-      glPopMatrix();
-
-      glPushMatrix();
-      glTranslated(-d, -d, z1);
-      dragon3.draw();
-      glPopMatrix();
-
-      glPushMatrix();
-      glTranslated(0, 0, z2);
-      dragon3.draw();
-      glPopMatrix();
-    glPopMatrix();
-  }
-
-  glFlush();
-  SDL_GL_SwapBuffers();
+void on_joy_button(ControllerState &ctrl, int button, bool down) {
 }
+
+
+
+typedef struct {
+  int random_seed;
+  bool start_blank;
+} init_params_t;
+
+init_params_t ip;
 
 int main(int argc, char *argv[])
 {
+  bool usage = false;
+  bool error = false;
+
+  int c;
+
+  char *out_stream_path = NULL;
+  char *out_params_path = NULL;
+  char *in_params_path = NULL;
+
+  ip.random_seed = time(NULL);
+
+  while (1) {
+    c = getopt(argc, argv, "hf:r:p:i:o:O:");
+    if (c == -1)
+      break;
+   
+    switch (c) {
+      case 'g':
+        {
+          char arg[strlen(optarg) + 1];
+          strcpy(arg, optarg);
+          char *ch = arg;
+          while ((*ch) && ((*ch) != 'x')) ch ++;
+          if ((*ch) == 'x') {
+            *ch = 0;
+            ch ++;
+            W = atoi(arg);
+            H = atoi(ch);
+
+          }
+          else {
+            fprintf(stderr, "Invalid -g argument: '%s'\n", optarg);
+            exit(-1);
+          }
+        }
+        break;
+
+      case 'f':
+        want_fps = atof(optarg);
+        break;
+
+      case 'r':
+        ip.random_seed = atoi(optarg);
+        break;
+
+      case 'O':
+        out_stream_path = optarg;
+        break;
+
+      case 'o':
+        out_params_path = optarg;
+        break;
+
+      case 'i':
+        in_params_path = optarg;
+        break;
+
+      case 'p':
+        audio_path = optarg;
+        break;
+
+      case '?':
+        error = true;
+      case 'h':
+        usage = true;
+        break;
+
+    }
+  }
+
+  if (usage) {
+    if (error)
+      printf("\n");
+    printf(
+"scop3 v0.1\n"
+"(c) 2014 Neels Hofmeyr <neels@hofmeyr.de>\n"
+"Published under the GNU General Public License v3.\n\n"
+"Scop3 produces a mesmerizing animation controlled by any game controller.\n"
+"\n"
+"Usage example:\n"
+"  scop3 -g 320x200 -f 25\n"
+"\n"
+"Options:\n"
+"\n"
+"  -g WxH   Set window width and height in number of pixels.\n"
+"           Default is '-g %dx%d'.\n"
+"  -f fps   Set desired framerate to <fps> frames per second. The framerate\n"
+"           may slew if your system cannot calculate fast enough.\n"
+"           If zero, run as fast as possible. Default is %.1f.\n"
+"  -r seed  Supply a random seed to start off with.\n"
+"  -O file  Write raw video data to file (grows large quickly). Can be\n"
+"           converted to a video file using e.g. ffmpeg.\n"
+"  -o file  Write live control parameters to file for later playback, see -i.\n"
+"  -i file  Play back previous control parameters (possibly in a different\n"
+"           resolution and streaming video to file...)\n"
+"  -p file  Play back audio file in sync with actual framerate.\n"
+"           The file format should match your sound card output format\n"
+"           exactly.\n"
+, W, H, want_fps
+);
+    if (error)
+      return 1;
+    return 0;
+  }
+
+  const int maxpixels = 1e4;
+
+  if ((W < 3) || (W > maxpixels) || (H < 3) || (H > maxpixels)) {
+    fprintf(stderr, "width and/or height out of bounds: %dx%d\n", W, H);
+    exit(1);
+  }
+
   SDL_Event event;
 
   SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_JOYSTICK);
@@ -517,7 +759,8 @@ int main(int argc, char *argv[])
   SDL_WM_SetCaption("SCOP3", NULL);
   int w = 1920;
   int h = 1080;
-  SDL_SetVideoMode(w,h, 32, SDL_OPENGL);
+  screen = SDL_SetVideoMode(w,h, 32, SDL_OPENGL);
+  SDL_ShowCursor(SDL_DISABLE);
 
   glMatrixMode( GL_PROJECTION );
   glLoadIdentity();
@@ -527,16 +770,21 @@ int main(int argc, char *argv[])
   glEnable (GL_BLEND);
   glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-  dragon1.update(10, .3, 1, 0);
-  dragon2.update(10, .3, 1, 0);
-  dragon3.update(10, .3, 1, 0);
-
-  Dessiner();
+  draw_scene();
 
   Uint32 last_time = SDL_GetTicks();
   Uint32 current_time,elapsed_time;
   Uint32 start_time;
 
+  if (out_stream_path) {
+    if (access(out_stream_path, F_OK) == 0) {
+      fprintf(stderr, "file exists, will not overwrite: %s\n", out_stream_path);
+      exit(1);
+    }
+    out_stream = fopen(out_stream_path, "w");
+  }
+
+  /*
   double dragon_r = .3;
   double dragon_r_target = .3;
   double dragon_r_change = 0;
@@ -549,60 +797,86 @@ int main(int argc, char *argv[])
   double want_vision = 0;
   double alpha = 0;
   double want_alpha = 0;
+  */
+
+  please_render = SDL_CreateSemaphore(0);
+  please_save = SDL_CreateSemaphore(0);
+  rendering_done = SDL_CreateSemaphore(0);
+  saving_done = SDL_CreateSemaphore(1);
+
+  SDL_Thread *render_thread_token = SDL_CreateThread(render_thread, NULL);
+  SDL_Thread *save_thread_token = NULL;
+  if (out_stream)
+    SDL_CreateThread(save_thread, NULL);
 
   while (running)
   {
-    start_time = SDL_GetTicks();
-    while (running && SDL_PollEvent(&event))
-    {
-      switch(event.type)
-      {
-        default:
-          handle_joystick_events(event);
-          break;
-
-        case SDL_QUIT:
-          running = false;
-          break;
-
-        case SDL_KEYDOWN:
-          {
-            int c = event.key.keysym.sym;
-
-            switch(c) {
-              case SDLK_ESCAPE:
-                printf("Escape key. Stop.\n");
-                running = false;
-                break;
-            }
-          }
-          break;
-      }
-    }
-
     animation.step();
 
-    current_time = SDL_GetTicks();
-    elapsed_time = current_time - last_time;
-    last_time = current_time;
+    SDL_SemPost(please_render);
 
-    angleZ += rot_z;
-    angleX += rot_x;
-    dragon_fold += fold_speed;
-    dragon_r_target += dragon_r_change;
-    dragon_r = (.1 * dragon_r_target) + (.9 * dragon_r);
+    while (running) {
+      SDL_Event event;
+      while (running && SDL_PollEvent(&event)) 
+      {
 
-    dragon1.update(dragon_points, dragon_r, dragon_fold, alpha);
-    dragon2.update(dragon_points, dragon_r, dragon_fold, alpha);
-    dragon3.update(dragon_points, dragon_r, dragon_fold, alpha);
-    Dessiner();
+        switch(event.type)
+        {
+          default:
+            handle_joystick_events(event);
+            break;
 
-    elapsed_time = SDL_GetTicks() - start_time;
-    if (elapsed_time < 40)
-    {
-        SDL_Delay(40 - elapsed_time);
-    }
+          case SDL_QUIT:
+            running = false;
+            break;
+
+          case SDL_KEYDOWN:
+            {
+              int c = event.key.keysym.sym;
+
+              switch(c) {
+                case SDLK_ESCAPE:
+                  printf("Escape key. Stop.\n");
+                  running = false;
+                  break;
+
+                  case 13:
+                    SDL_WM_ToggleFullScreen(screen);
+                    break;
+              }
+            }
+            break;
+        }
+      } // while sdl poll event
+
+      if (SDL_SemTryWait(rendering_done) == 0)
+        break;
+      else
+        SDL_Delay(5);
+    } // while running, for event polling / idle waiting
+
+  } // while running
+
+  running = false;
+
+  // make sure threads exit.
+  SDL_SemPost(please_render);
+  SDL_SemPost(please_render);
+  if (out_stream) {
+    SDL_SemPost(please_save);
+    SDL_SemPost(please_save);
   }
+  printf("waiting for render thread...\n");
+  SDL_WaitThread(render_thread_token, NULL);
+  if (out_stream) {
+    printf("waiting for save thread...\n");
+    SDL_WaitThread(save_thread_token, NULL);
+  }
+
+  SDL_DestroySemaphore(please_render);
+  SDL_DestroySemaphore(please_save);
+  SDL_DestroySemaphore(rendering_done);
+  SDL_DestroySemaphore(saving_done);
 
   return 0;
 }
