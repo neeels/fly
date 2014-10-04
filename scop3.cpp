@@ -181,13 +181,9 @@ class Dragon {
       maxangle = M_PI * .9;
     }
 
-    void update(double f_segments, double r, double fold, double alpha)
+    void update(double f_segments, double r, double fold, double alpha, double angle_zero)
     {
       Point p;
-      Pf(f_segments);
-      Pf(r);
-      Pf(fold);
-      Pf(alpha);
 
       int n_segments = (int)ceil(f_segments);
       n_segments = max(1, n_segments);
@@ -205,78 +201,53 @@ class Dragon {
       }
 
 
-      p.set(0, 0, 0);
-      p.c = segments[0].c;
-
-      points1.clear();
-      points1.push_back(p);
-
-      for (int i = 0; i < n_segments; i += 2) {
-        Point q = segments[i];
-        q.y *= fold;
-        q.z *= fold;
-        q.angular();
-        q *= r;
-        p += q;
-        p.c = q.c;
-        double a = ((double)i)/f_segments;
-        if (alpha < .5) 
-          a *= (alpha*2);
-        else
-          a = max(a, (alpha - .5)*2);
-        p.c.a = 1. - a;
-        points1.push_back(p);
-        p.print();
+#define do_points(_points, _r, _ang) \
+      { \
+        double angle_accum = 0; \
+        p.set(0, 0, 0); \
+        p.c = segments[0].c; \
+        _points.clear(); \
+        _points.push_back(p); \
+        for (int i = 0; i < n_segments; i += 2) { \
+          Point q = segments[i]; \
+          q.y *= fold; \
+          q.z *= fold; \
+          q._ang += angle_accum; \
+          angle_accum += angle_zero; \
+          q.angular(); \
+          q *= _r; \
+          p += q; \
+          p.c = q.c; \
+          p.c.a = alpha; \
+          _points.push_back(p); \
+        } \
       }
 
-      p.set(0, 0, 0);
-      p.c = segments[0].c;
 
-      points2.clear();
-      points2.push_back(p);
-      
-      for (int i = 1; i < n_segments; i += 2) {
-        Point q = segments[i];
-        q.y *= fold;
-        q.z *= fold;
-        q.angular();
-        q *= r;
-        p -= q;
-        p.c = q.c;
-        double a = ((double)i)/f_segments;
-        if (alpha < .5) 
-          a *= (alpha*2);
-        else
-          a = max(a, (alpha - .5)*2);
-        p.c.a = 1. - a;
-        points2.push_back(p);
-        p.print();
-      }
+      do_points(points1, r, y);
+      do_points(points2, -r, z);
       
     }
 
-
-
-    void draw() {
+    void draw_lines() {
       int l;
-
       glBegin(GL_LINES);
 
-      points1[0].draw();
-      l = points1.size() - 1;
       for (int i = 1; i < l; i++) {
-        points1[i].draw(true);
+        points1[i-1].draw();
+        points1[i].draw();
       }
-      points1[l].draw();
 
-      points2[0].draw();
-      l = points2.size() - 1;
       for (int i = 1; i < l; i++) {
-        points2[i].draw(true);
+        points2[i-1].draw();
+        points2[i].draw();
       }
-      points2[l].draw();
+
       glEnd();
+    }
 
+    void draw_triangles() {
+      int l;
       glBegin(GL_TRIANGLES);
 
       l = points1.size();
@@ -304,15 +275,13 @@ class Param {
 
     double slew;
 
-    Param(double val = 0, double slew=0.95){
+    Param(double val = 0, double slew=0.85){
       this->val = known_want_val = want_val = val;
       this->slew = slew;
     }
 
     void step() {
-      printf("step %f", val);
       val = slew * val + (1. - slew) * want_val;
-      printf(" --> %f", val);
     }
 
     bool changed() {
@@ -325,13 +294,11 @@ class Param {
 
     Param& operator=(double v) {
       want_val = v;
-      printf("assign want_val=%f\n", v);
       return *this;
     }
 
     Param& operator=(Param &v) {
       want_val = v.want_val;
-      printf("assign want_val=Param(%f)\n", v.want_val);
       return *this;
     }
 
@@ -340,8 +307,12 @@ class Param {
       return *this;
     }
 
+    Param& operator+=(double v) {
+      want_val += v;
+      return *this;
+    }
+
     operator double() {
-      printf("returning %f\n", val);
       return val;
     }
 
@@ -364,27 +335,56 @@ class Animation {
     Param dragon_fold;
     Param angleZ;
     Param angleX;
+    Param rotate_shift_change;
+    Param rotate_shift;
+    Param distance_change;
+    Param distance;
+    Param dist_scale;
+    Param angle_zero_change;
+    Param angle_zero;
+
 
     vector<Dragon> dragons;
 
     Animation(int n_dragons = 3) {
-      dragon_points = 3;
+      dragon_points = 52;
       rot_x.slew = .9;
       rot_z.slew = .9;
       fold_speed.slew = .9;
       vision.slew = .96;
-      alpha = 1;
-      dragon_r = .3;
-      dragon_fold = 1;
+      alpha = .9;
+      dragon_r = 2;
+      dragon_fold = .01;
+      rotate_shift_change = .001;
+      distance = 1.;
+      dist_scale = -.01;
+      dist_scale.slew = .97;
 
       Dragon d;
       for (int i = 0; i < n_dragons; i++) {
         dragons.push_back(d);
-        dragons.back().update(dragon_points, dragon_r, dragon_fold, alpha);
+        dragons.back().update(dragon_points, dragon_r, dragon_fold, alpha, angle_zero);
       }
     }
 
     void step() {
+      angleZ += rot_z;
+      angleX += rot_x;
+      dragon_fold += fold_speed;
+      dragon_r += dragon_r_change;
+      if (dragon_r.want_val < 0.1) {
+        dragon_r = .1;
+        dragon_r_change = 0;
+      }
+
+      rotate_shift += rotate_shift_change;
+      distance += distance_change;
+      if (distance.want_val < 0) {
+        distance = 0;
+      }
+
+      angle_zero += angle_zero_change;
+
       rot_x.step();
       rot_z.step();
       fold_speed.step();
@@ -396,16 +396,14 @@ class Animation {
       dragon_fold.step();
       angleZ.step();
       angleX.step();
+      rotate_shift.step();
+      distance_change.step();
+      distance.step();
+      dist_scale.step();
+      angle_zero.step();
 
-      angleZ += rot_z;
-      angleX += rot_x;
-      dragon_fold += fold_speed;
-      dragon_r += dragon_r_change;
-      Pf(dragon_r);
-      Pf(dragon_fold);
-      Pf(alpha);
       for (int i = 0; i < dragons.size(); i++) {
-        dragons[i].update(dragon_points, dragon_r, dragon_fold, alpha);
+        dragons[i].update(dragon_points, dragon_r, dragon_fold, alpha, angle_zero);
       }
     }
 };
@@ -416,9 +414,6 @@ Animation animation;
 
 void draw_scene()
 {
-  static double rotate_shift = 0;
-  rotate_shift += .003;
-
   glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
 
   glMatrixMode( GL_MODELVIEW );
@@ -436,14 +431,15 @@ void draw_scene()
   glRotated(angleZ,0,1,0);
   glRotated(angleX,1,0,0);
 
+  double rotate_shift = animation.rotate_shift;
   for (int i = 0; i < 100; i++) {
-    double dd = i * (1 + .4 * sin(rotate_shift * 1.23));
+    double dd = i * (animation.distance + .4 * sin(rotate_shift * 1.23));
     dd /= sc;
     double d = dd * .33;
 
     glPushMatrix();
       glRotated(i * (16.789 + rotate_shift),1,sin(rotate_shift),.25 * cos(rotate_shift));
-      double sc2 = 1. - .01 * i;
+      double sc2 = 1. + animation.dist_scale * i;
       glScaled(sc2,sc2,sc2);
 
       dd /= sc2;
@@ -470,7 +466,7 @@ void draw_scene()
       for (int j = 0; j < n_sphere_points; j++) {
         glPushMatrix();
         sphere_points[j].glTranslated();
-        animation.dragons[j % animation.dragons.size()].draw();
+        animation.dragons[j % animation.dragons.size()].draw_triangles();
         glPopMatrix();
       }
 
@@ -514,37 +510,92 @@ int save_thread(void *arg) {
 
 
 void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
-  switch(axis)
-  {
-    case 1:
-      animation.rot_x = (axis_val*axis_val*axis_val) * 6;
-      break;
+  switch(ctrl.selected_layer) {
+    default:
     case 0:
-      animation.rot_z = (axis_val*axis_val*axis_val) * 6;
-      break;
-    case 4:
-      animation.fold_speed = (axis_val*axis_val*axis_val) / 30;
-      break;
-    case 7:
-      animation.dragon_r_change = -axis_val / 20;
-      break;
-    case 3:
+      switch(axis)
       {
-        double dragon_points = (1. + axis_val)/2;
-        dragon_points *= dragon_points;
-        dragon_points = 1. + dragon_points * 240;
-        animation.dragon_points = dragon_points;
+        case 0:
+          animation.fold_speed = (axis_val*axis_val*axis_val) / 30;
+          break;
+        case 1:
+          animation.dragon_r_change = -axis_val / 10;
+          break;
+        case 3:
+          animation.rotate_shift_change = .003 + .01 * axis_val;
+          break;
+        case 4:
+          animation.distance_change = -(fabs(axis_val) < .05? 0. :
+                                        .1 * (axis_val * axis_val * axis_val) );
+          break;
+        case 7:
+          break;
+        case 5:
+          animation.dist_scale = .05 * (axis_val);
+          break;
+        case 2:
+          break;
+        default:
+          break;
       }
       break;
-    case 5:
-      animation.vision = (1. + axis_val)/2;
-      break;
+
     case 2:
-      animation.alpha = (1. + axis_val)/2;
+      switch(axis)
+      {
+        case 1:
+          animation.rot_x = (axis_val*axis_val*axis_val) * 6;
+          break;
+        case 0:
+          animation.rot_z = (axis_val*axis_val*axis_val) * 6;
+          break;
+        case 7:
+          break;
+        case 3:
+          {
+            double dragon_points = (1. + axis_val)/2;
+            dragon_points *= dragon_points;
+            dragon_points = 2. + dragon_points * 240;
+            animation.dragon_points = dragon_points;
+            Pf(dragon_points);
+            Pf(animation.dragon_points);
+          }
+          break;
+        case 5:
+          animation.vision = (1. + axis_val)/2;
+          break;
+        case 2:
+          animation.alpha = 1. - (1. + axis_val)/2;
+          break;
+        default:
+          break;
+      }
       break;
-    default:
+
+    case 1:
+      switch(axis)
+      {
+        case 1:
+          animation.angle_zero_change = axis_val / 200;
+          break;
+        case 0:
+          break;
+        case 4:
+          break;
+        case 7:
+          break;
+        case 3:
+          break;
+        case 5:
+          break;
+        case 2:
+          break;
+        default:
+          break;
+      }
       break;
   }
+
 }
 
 void on_joy_button(ControllerState &ctrl, int button, bool down) {
@@ -573,7 +624,7 @@ int main(int argc, char *argv[])
   ip.random_seed = time(NULL);
 
   while (1) {
-    c = getopt(argc, argv, "hf:r:p:i:o:O:");
+    c = getopt(argc, argv, "hf:g:r:p:i:o:O:");
     if (c == -1)
       break;
    
@@ -707,14 +758,12 @@ int main(int argc, char *argv[])
 
   atexit(SDL_Quit);
   SDL_WM_SetCaption("SCOP3", NULL);
-  int w = 1920;
-  int h = 1080;
-  screen = SDL_SetVideoMode(w,h, 32, SDL_OPENGL);
+  screen = SDL_SetVideoMode(W,H, 32, SDL_OPENGL | SDL_FULLSCREEN);
   SDL_ShowCursor(SDL_DISABLE);
 
   glMatrixMode( GL_PROJECTION );
   glLoadIdentity();
-  gluPerspective(70,(double)w/h,1,1000);
+  gluPerspective(70,(double)W/H,1,10000);
 
   glEnable(GL_DEPTH_TEST);
   glEnable (GL_BLEND);
@@ -753,19 +802,20 @@ int main(int argc, char *argv[])
   saving_done = SDL_CreateSemaphore(1);
 
   SDL_Thread *save_thread_token = NULL;
-  if (out_stream)
-    SDL_CreateThread(save_thread, NULL);
+  //if (out_stream)
+  //  SDL_CreateThread(save_thread, NULL);
 
   float want_frame_period = (want_fps > .1? 1000. / want_fps : 0);
   float last_ticks = (float)SDL_GetTicks() - want_frame_period;
 
+  char *pixelbuf = NULL;
+  if (out_stream) {
+    pixelbuf = (char*)malloc(W * H * 4); // 4 = RGBA
+  }
+
   while (running)
   {
     animation.step();
-
-    if (out_stream) {
-      SDL_SemWait(saving_done);
-    }
 
     draw_scene();
     frames_rendered ++;
@@ -782,7 +832,8 @@ int main(int argc, char *argv[])
     }
 
     if (out_stream) {
-      SDL_SemPost(please_save);
+      glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, pixelbuf);
+      fwrite(pixelbuf, sizeof(Uint32), W * H, out_stream);
     }
 
     while (running) {
@@ -834,17 +885,19 @@ int main(int argc, char *argv[])
 
   running = false;
 
+  printf("\n");
+  printf("%d frames rendered\n", frames_rendered);
   if (out_stream) {
-    SDL_SemPost(please_save);
-    SDL_SemPost(please_save);
-  }
-  if (out_stream) {
-    printf("waiting for save thread...\n");
-    SDL_WaitThread(save_thread_token, NULL);
-  }
+    fclose(out_stream);
+    out_stream = NULL;
 
-  SDL_DestroySemaphore(please_save);
-  SDL_DestroySemaphore(saving_done);
+    printf("suggestion:\n"
+        "ffmpeg -vcodec rawvideo -f rawvideo -pix_fmt rgb32 -s %dx%d -i %s ",
+        W, H, out_stream_path);
+    if (audio_path)
+      printf("-i %s -acodec ac3 ", audio_path);
+    printf("-vcodec mpeg4 -q 1 %s.%d.mp4\n", out_stream_path, H);
+  }
 
   return 0;
 }
