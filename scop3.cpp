@@ -49,6 +49,12 @@ class Color {
       this->a = a;
     }
 
+    void set(rgb_t &rgb) {
+      this->r = rgb.r;
+      this->g = rgb.g;
+      this->b = rgb.b;
+    }
+
     void random(double cmin, double cmax) {
       r = frandom();
       g = frandom();
@@ -181,7 +187,8 @@ class Dragon {
       maxangle = M_PI * .9;
     }
 
-    void update(double f_segments, double r, double fold, double alpha, double angle_zero)
+    void update(double f_segments, double r, double fold, double alpha, double angle_zero,
+                palette_t &pal)
     {
       Point p;
 
@@ -203,7 +210,7 @@ class Dragon {
       { \
         double angle_accum = 0; \
         p.set(0, 0, 0); \
-        p.c = segments[0].c; \
+        p.c.set( pal.colors[0] ); \
         _points.clear(); \
         _points.push_back(p); \
         for (int i = 0; i < n_segments; i += 2) { \
@@ -215,7 +222,7 @@ class Dragon {
           q.angular(); \
           q *= _r; \
           p += q; \
-          p.c = q.c; \
+          p.c.set( pal.colors[ (int)((double)i / n_segments * pal.len) ] ); \
           p.c.a = alpha; \
           _points.push_back(p); \
         } \
@@ -374,13 +381,22 @@ class Animation {
     Param triangles_alpha;
     Param lines_alpha;
     Param lines_scale;
+    Param palette_selected;
+    Param palette_blend_speed;
 
     palette_t palette;
     palette_t blended_palette;
+    palette_t *is_palette;
+    palette_t *want_palette;
+    double palette_blend;
+    bool stop_palette_transition;
 
     vector<Dragon> dragons;
 
     Animation(int n_dragons = 3) {
+      is_palette = &palettes[0];
+      want_palette = is_palette;
+
       make_palettes();
       make_palette(&palette, PALETTE_LEN,
                    palette_defs[0]);
@@ -408,11 +424,16 @@ class Animation {
       triangles_alpha = .5;
       lines_alpha = 1;
       lines_scale = 1.1;
+      palette_blend = 0;
+      stop_palette_transition = false;
+      palette_selected = 0;
+      palette_selected.slew = 0;
+      palette_blend_speed = .6;
 
       Dragon d;
       for (int i = 0; i < n_dragons; i++) {
         dragons.push_back(d);
-        dragons.back().update(dragon_points, dragon_r, dragon_fold, alpha, angle_zero);
+        dragons.back().update(dragon_points, dragon_r, dragon_fold, alpha, angle_zero, palette);
       }
     }
 
@@ -431,10 +452,61 @@ class Animation {
       triangles_alpha.step();
       lines_alpha.step();
       lines_scale.step();
+      palette_selected.step();
+      palette_blend_speed.step();
+
+
+      int _palette_selected = palette_selected;
+      if ((_palette_selected >= 0)
+          && (_palette_selected < n_palettes))
+      {
+        palette_t *pal_selected = &palettes[_palette_selected];
+        if (want_palette != is_palette) 
+        {
+          if (pal_selected == want_palette)
+          {
+            stop_palette_transition = ! stop_palette_transition;
+          }
+          else
+          if (pal_selected == is_palette) {
+            stop_palette_transition = false;
+            palette_t *tmp = is_palette;
+            is_palette = want_palette;
+            want_palette = tmp;
+            palette_blend = 1. - palette_blend;
+          }
+          else {
+            memcpy(blended_palette.colors, palette.colors,
+                   blended_palette.len * sizeof(rgb_t));
+            is_palette = &blended_palette;
+            want_palette = pal_selected;
+            stop_palette_transition = false;
+            palette_blend = 0;
+          }
+        }
+        else
+        {
+          want_palette = pal_selected;
+          stop_palette_transition = false;
+        }
+      }
+      if ((want_palette != is_palette) && ! stop_palette_transition) {
+        float palette_blend_was = palette_blend;
+        palette_blend += palette_blend_speed / want_fps;
+        blend_palettes(&palette, is_palette, want_palette, min(1., palette_blend));
+        if (palette_blend >= 1.) {
+          is_palette = want_palette;
+          palette_blend = 0;
+        }
+        if ((palette_blend_was < .5) != (palette_blend < .5))
+          stop_palette_transition = true;
+      }
 
       for (int i = 0; i < dragons.size(); i++) {
-        dragons[i].update(dragon_points, dragon_r, dragon_fold, alpha, angle_zero);
+        dragons[i].update(dragon_points, dragon_r, dragon_fold, alpha, angle_zero, palette);
       }
+
+      palette_selected = -1;
     }
 };
 
@@ -561,7 +633,7 @@ void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
           animation.dist_scale.change = axis_val / 20;
           break;
         case 1:
-          animation.rotate_shift.change = .0003 + .01 * axis_val;
+          animation.rotate_shift.change = .00003 + .01 * axis_val;
           break;
         default:
           break;
@@ -661,7 +733,7 @@ void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
 void on_joy_button(ControllerState &ctrl, int button, bool down) {
   switch(ctrl.selected_layer) {
 
-    case 2:
+    case 3:
       switch(button) {
         case 0:
           animation.angle_zero.change = 0;
@@ -672,6 +744,11 @@ void on_joy_button(ControllerState &ctrl, int button, bool down) {
           animation.dragon_fold = 0;
           break;
       }
+      break;
+
+    case 2:
+      if (down)
+        animation.palette_selected = button;
       break;
 
   }
