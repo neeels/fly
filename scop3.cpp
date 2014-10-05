@@ -14,6 +14,7 @@
 using namespace std;
 
 #include "ctrl_layers.h"
+#include "palettes.h"
 
 #define Pf(V) printf(#V "=%f\n", (float)V)
 
@@ -63,15 +64,16 @@ class Color {
 
     }
 
-    void glColor(double greying=0) {
+    void glColor(double alpha=1., double greying=0) {
+      alpha *= a;
       if (greying > .01)
         ::glColor4f(( r * (1.-greying) + greying * .33),
                     ( g * (1.-greying) + greying * .33),
                     ( b * (1.-greying) + greying * .33),
-                    ( a * (1.-greying) + greying * .33)
+                    ( alpha * (1.-greying) + greying * .33)
                     );
       else
-        ::glColor4f(r, g, b, a);
+        ::glColor4f(r, g, b, alpha);
     }
 };
 
@@ -157,11 +159,9 @@ class Point {
       printf("x%f y%f z%f\n", x, y, z);
     }
 
-    void draw(bool twice=false, double greying=0) {
-      c.glColor(greying);
+    void draw(double alpha=1., double greying=0) {
+      c.glColor(alpha, greying);
       glVertex3d();
-      if (twice)
-        glVertex3d();
     }
 };
 
@@ -189,8 +189,6 @@ class Dragon {
       n_segments = max(1, n_segments);
 
       if (segments.size() < n_segments) {
-        printf("%d --> %d\n", segments.size(), n_segments);
-
         for (int i = segments.size(); i < n_segments; i++) {
           p.set(frandom()*.9 + 5.1,
                 (frandom() - .5)*2 * maxangle + (M_PI/3),
@@ -229,39 +227,42 @@ class Dragon {
       
     }
 
-    void draw_lines() {
+    void draw_lines(double alpha=1.) {
       int l;
+
       glBegin(GL_LINES);
 
+      l = points1.size();
       for (int i = 1; i < l; i++) {
-        points1[i-1].draw();
-        points1[i].draw();
+        points1[i-1].draw(alpha);
+        points1[i].draw(alpha);
       }
 
+      l = points2.size();
       for (int i = 1; i < l; i++) {
-        points2[i-1].draw();
-        points2[i].draw();
+        points2[i-1].draw(alpha);
+        points2[i].draw(alpha);
       }
 
       glEnd();
     }
 
-    void draw_triangles() {
+    void draw_triangles(double alpha=1) {
       int l;
       glBegin(GL_TRIANGLES);
 
       l = points1.size();
       for (int i = 2; i < l; i++) {
-        points1[i-2].draw();
-        points1[i-1].draw();
-        points1[i].draw();
+        points1[i-2].draw(alpha);
+        points1[i-1].draw(alpha);
+        points1[i].draw(alpha);
       }
 
       l = points2.size();
       for (int i = 2; i < l; i++) {
-        points2[i-2].draw();
-        points2[i-1].draw();
-        points2[i].draw();
+        points2[i-2].draw(alpha);
+        points2[i-1].draw(alpha);
+        points2[i].draw(alpha);
       }
       glEnd();
     }
@@ -274,13 +275,31 @@ class Param {
     double want_val;
 
     double slew;
+    double change;
+
+    bool do_limit_min;
+    double val_min;
+
+    bool do_limit_max;
+    double val_max;
+
 
     Param(double val = 0, double slew=0.85){
       this->val = known_want_val = want_val = val;
       this->slew = slew;
+      change = 0;
+      do_limit_min = false;
+      val_min = -1;
+      do_limit_max = false;
+      val_max = 1;
     }
 
     void step() {
+      want_val += change;
+      if (do_limit_min)
+        want_val = max(val_min, want_val);
+      if (do_limit_max)
+        want_val = min(val_max, want_val);
       val = slew * val + (1. - slew) * want_val;
     }
 
@@ -288,8 +307,25 @@ class Param {
       return known_want_val != want_val;
     }
 
-    void change_handled() {
+    void set_unchanged() {
       known_want_val = want_val;
+    }
+
+    void limit(double min_val, double max_val) {
+      val_min = min_val;
+      do_limit_min = true;
+      val_max = max_val;
+      do_limit_max = true;
+    }
+
+    void limit_min(double min_val) {
+      val_min = min_val;
+      do_limit_min = true;
+    }
+
+    void limit_max(double max_val) {
+      val_max = max_val;
+      do_limit_max = true;
     }
 
     Param& operator=(double v) {
@@ -326,39 +362,52 @@ class Animation {
   public:
     Param rot_x;
     Param rot_z;
-    Param fold_speed;
     Param vision;
     Param alpha;
     Param dragon_points;
-    Param dragon_r_change;
     Param dragon_r;
     Param dragon_fold;
-    Param angleZ;
-    Param angleX;
-    Param rotate_shift_change;
     Param rotate_shift;
-    Param distance_change;
     Param distance;
     Param dist_scale;
-    Param angle_zero_change;
     Param angle_zero;
+    Param triangles_alpha;
+    Param lines_alpha;
+    Param lines_scale;
 
+    palette_t palette;
+    palette_t blended_palette;
 
     vector<Dragon> dragons;
 
     Animation(int n_dragons = 3) {
+      make_palettes();
+      make_palette(&palette, PALETTE_LEN,
+                   palette_defs[0]);
+
+      make_palette(&blended_palette, PALETTE_LEN,
+                   palette_defs[0]);
+
+
       dragon_points = 52;
-      rot_x.slew = .9;
-      rot_z.slew = .9;
-      fold_speed.slew = .9;
+      rot_x.slew = .94;
+      rot_z.slew = .94;
       vision.slew = .96;
       alpha = .9;
-      dragon_r = 2;
+      dragon_r = 1;
+      dragon_r.limit_min(.01);
       dragon_fold = .01;
-      rotate_shift_change = .001;
+      rotate_shift = 0;
+      rotate_shift.change = .0002;
       distance = 1.;
+      distance.slew = .97;
+      distance.limit_min(0);
       dist_scale = -.01;
       dist_scale.slew = .97;
+      dist_scale.limit(-1, 1);
+      triangles_alpha = .5;
+      lines_alpha = 1;
+      lines_scale = 1.1;
 
       Dragon d;
       for (int i = 0; i < n_dragons; i++) {
@@ -368,39 +417,20 @@ class Animation {
     }
 
     void step() {
-      angleZ += rot_z;
-      angleX += rot_x;
-      dragon_fold += fold_speed;
-      dragon_r += dragon_r_change;
-      if (dragon_r.want_val < 0.1) {
-        dragon_r = .1;
-        dragon_r_change = 0;
-      }
-
-      rotate_shift += rotate_shift_change;
-      distance += distance_change;
-      if (distance.want_val < 0) {
-        distance = 0;
-      }
-
-      angle_zero += angle_zero_change;
-
       rot_x.step();
       rot_z.step();
-      fold_speed.step();
       vision.step();
       alpha.step();
       dragon_points.step();
-      dragon_r_change.step();
       dragon_r.step();
       dragon_fold.step();
-      angleZ.step();
-      angleX.step();
       rotate_shift.step();
-      distance_change.step();
       distance.step();
       dist_scale.step();
       angle_zero.step();
+      triangles_alpha.step();
+      lines_alpha.step();
+      lines_scale.step();
 
       for (int i = 0; i < dragons.size(); i++) {
         dragons[i].update(dragon_points, dragon_r, dragon_fold, alpha, angle_zero);
@@ -424,22 +454,25 @@ void draw_scene()
 
   double sc = 1;
 
-  double angleZ = animation.angleZ;
-  double angleX = animation.angleX;
+  double angleZ = animation.rot_z;
+  double angleX = animation.rot_x;
 
   glScaled(sc, sc, sc);
   glRotated(angleZ,0,1,0);
   glRotated(angleX,1,0,0);
 
   double rotate_shift = animation.rotate_shift;
-  for (int i = 0; i < 100; i++) {
+  int n_onion_shells = 100;
+  for (int i = 0; i < n_onion_shells; i++) {
     double dd = i * (animation.distance + .4 * sin(rotate_shift * 1.23));
     dd /= sc;
     double d = dd * .33;
 
     glPushMatrix();
       glRotated(i * (16.789 + rotate_shift),1,sin(rotate_shift),.25 * cos(rotate_shift));
-      double sc2 = 1. + animation.dist_scale * i;
+
+      double K = animation.dist_scale;
+      double sc2 = 1. + K - 2.*K * i / n_onion_shells;
       glScaled(sc2,sc2,sc2);
 
       dd /= sc2;
@@ -466,7 +499,14 @@ void draw_scene()
       for (int j = 0; j < n_sphere_points; j++) {
         glPushMatrix();
         sphere_points[j].glTranslated();
-        animation.dragons[j % animation.dragons.size()].draw_triangles();
+        if (animation.triangles_alpha > .01)
+          animation.dragons[j % animation.dragons.size()].draw_triangles(animation.triangles_alpha);
+        if (animation.lines_alpha > .01)
+        {
+          double lines_scale = animation.lines_scale;
+          glScaled(lines_scale, lines_scale, lines_scale);
+          animation.dragons[j % animation.dragons.size()].draw_lines(animation.lines_alpha);
+        }
         glPopMatrix();
       }
 
@@ -512,20 +552,94 @@ int save_thread(void *arg) {
 void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
   switch(ctrl.selected_layer) {
     default:
+      break;
+
     case 0:
       switch(axis)
       {
         case 0:
-          animation.fold_speed = (axis_val*axis_val*axis_val) / 30;
+          animation.dist_scale.change = axis_val / 20;
           break;
         case 1:
-          animation.dragon_r_change = -axis_val / 10;
+          animation.rotate_shift.change = .0003 + .01 * axis_val;
+          break;
+        default:
+          break;
+      }
+      break;
+
+    case 1:
+      switch(axis)
+      {
+        case 1:
+          animation.rot_x.change = (axis_val*axis_val*axis_val) * 6;
+          break;
+        case 0:
+          animation.rot_z.change = (axis_val*axis_val*axis_val) * 6;
+          break;
+        case 7:
           break;
         case 3:
-          animation.rotate_shift_change = .003 + .01 * axis_val;
+          {
+            double dragon_points = (1. + axis_val)/2;
+            dragon_points *= dragon_points;
+            dragon_points = 2. + dragon_points * 240;
+            animation.dragon_points = dragon_points;
+          }
           break;
         case 4:
-          animation.distance_change = -(fabs(axis_val) < .05? 0. :
+          animation.lines_scale.change = axis_val * .05;
+          break;
+        case 5:
+          animation.vision = (1. + axis_val)/2;
+          break;
+        case 2:
+          animation.alpha = 1. - (1. + axis_val)/2;
+          break;
+        default:
+          break;
+      }
+      break;
+
+    case 2:
+      switch(axis)
+      {
+        case 1:
+          animation.angle_zero.change = axis_val / 200;
+          break;
+        case 0:
+          break;
+        case 7:
+          break;
+        case 3:
+          animation.lines_alpha.change = axis_val / 20;
+          break;
+        case 4:
+          animation.triangles_alpha.change = -axis_val / 20;
+          break;
+        case 5:
+          break;
+        case 2:
+          break;
+        default:
+          break;
+      }
+      break;
+
+    case 3:
+      switch(axis)
+      {
+        case 0:
+          animation.dragon_fold.change = (axis_val*axis_val*axis_val) / 30;
+          break;
+        case 1:
+          animation.dragon_r.change = -axis_val / 10;
+          break;
+        case 3:
+          animation.rotate_shift.change = .003 + .01 * axis_val;
+          break;
+        case 4:
+          animation.distance.change = -(fabs(axis_val) < .05? 0. :
                                         .1 * (axis_val * axis_val * axis_val) );
           break;
         case 7:
@@ -540,65 +654,27 @@ void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
       }
       break;
 
-    case 2:
-      switch(axis)
-      {
-        case 1:
-          animation.rot_x = (axis_val*axis_val*axis_val) * 6;
-          break;
-        case 0:
-          animation.rot_z = (axis_val*axis_val*axis_val) * 6;
-          break;
-        case 7:
-          break;
-        case 3:
-          {
-            double dragon_points = (1. + axis_val)/2;
-            dragon_points *= dragon_points;
-            dragon_points = 2. + dragon_points * 240;
-            animation.dragon_points = dragon_points;
-            Pf(dragon_points);
-            Pf(animation.dragon_points);
-          }
-          break;
-        case 5:
-          animation.vision = (1. + axis_val)/2;
-          break;
-        case 2:
-          animation.alpha = 1. - (1. + axis_val)/2;
-          break;
-        default:
-          break;
-      }
-      break;
-
-    case 1:
-      switch(axis)
-      {
-        case 1:
-          animation.angle_zero_change = axis_val / 200;
-          break;
-        case 0:
-          break;
-        case 4:
-          break;
-        case 7:
-          break;
-        case 3:
-          break;
-        case 5:
-          break;
-        case 2:
-          break;
-        default:
-          break;
-      }
-      break;
   }
 
 }
 
 void on_joy_button(ControllerState &ctrl, int button, bool down) {
+  switch(ctrl.selected_layer) {
+
+    case 2:
+      switch(button) {
+        case 0:
+          animation.angle_zero.change = 0;
+          animation.angle_zero = 0;
+          break;
+        case 2:
+          animation.dragon_fold.change = 0;
+          animation.dragon_fold = 0;
+          break;
+      }
+      break;
+
+  }
 }
 
 
@@ -792,7 +868,6 @@ int main(int argc, char *argv[])
 
   double rot_x = 0;
   double rot_z = 0;
-  double fold_speed = 0;
   double want_vision = 0;
   double alpha = 0;
   double want_alpha = 0;

@@ -41,7 +41,7 @@ void handle_joystick_events(SDL_Event &event) {
         {
           case 6:
             if (axis_val < -.2) {
-              l = 2;
+              l = 1;
             }
             else
             if (axis_val > .2) {
@@ -51,7 +51,7 @@ void handle_joystick_events(SDL_Event &event) {
 
           case 7:
             if (axis_val < -.2) {
-              l = 1;
+              l = 2;
             }
             else
             if (axis_val > .2) {
