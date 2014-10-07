@@ -31,6 +31,125 @@ float frandom(void) {
   return (float)(random()) / INT_MAX;
 }
 
+class Pt {
+  public:
+
+    double x;
+    double y;
+    double z;
+
+    Pt() {
+      set(0,0,0);
+    }
+
+    Pt(double x, double y, double z) {
+      set(x, y, z);
+    }
+
+    void set(double x, double y, double z) {
+      this->x = x;
+      this->y = y;
+      this->z = z;
+    }
+
+    void ang2cart(double r, double ang1, double ang2) {
+      set(r * cos(ang1) * cos(ang2),
+          r * cos(ang1) * sin(ang2),
+          r * sin(ang1));
+    }
+
+    void ang2cart() {
+      ang2cart(x, y, z);
+    }
+
+    void cart2ang() {
+      // dunno
+      double r = sqrt(x*x + y*y + z*z);
+      if (fabs(r) < 1e-5) {
+        x = y = z = 0;
+      }
+      else {
+        double ay = acos(z / r);
+        double az;
+        if (fabs(x) < 1e-5) {
+          az = 0;
+        }
+        else {
+          az = atan(y / x);
+        }
+        x = r;
+        y = ay;
+        z = az;
+      }
+    }
+
+    void set_min(Pt &p) {
+      x = min(x, p.x);
+      y = min(y, p.y);
+      z = min(z, p.z);
+    }
+
+    void set_max(Pt &p) {
+      x = max(x, p.x);
+      y = max(y, p.y);
+      z = max(z, p.z);
+    }
+
+    Pt& operator+=(const Pt &p) {
+      x += p.x;
+      y += p.y;
+      z += p.z;
+      return *this;
+    }
+
+    Pt& operator-=(const Pt &p) {
+      x -= p.x;
+      y -= p.y;
+      z -= p.z;
+      return *this;
+    }
+
+    Pt& operator*=(const double f) {
+      x *= f;
+      y *= f;
+      z *= f;
+      return *this;
+    }
+
+
+    void glVertex3d() {
+      ::glVertex3d(x, y, z);
+    }
+
+    void glTranslated() {
+      ::glTranslated(x, y, z);
+    }
+
+    void glRotated() {
+      if (x) {
+        ::glRotated(x,1,0,0);
+      }
+      if (y) {
+        ::glRotated(y,0,1,0);
+      }
+      if (z) {
+        ::glRotated(z,0,0,1);
+      }
+    }
+
+    void glScaled() {
+      ::glScaled(x, y, z);
+    }
+
+    void print() {
+      printf("x%f y%f z%f\n", x, y, z);
+    }
+
+};
+
+
+
+
 class Color {
   public:
     double r;
@@ -84,91 +203,150 @@ class Color {
 };
 
 
-class Point {
-  public:
 
-    double x;
-    double y;
-    double z;
+class Point : public Pt{
+  public:
 
     Color c;
 
-    Point() {
-      set(0,0,0);
+    Point() : Pt() {
       c.random(.3, 1);
     }
 
-    Point(double x, double y, double z) {
-      set(x, y, z);
+    Point(double x, double y, double z) : Pt(x, y, z) {
       c.random(.3, 1);
-    }
-
-    void set(double x, double y, double z) {
-      this->x = x;
-      this->y = y;
-      this->z = z;
-    }
-
-    void angular(double r, double ang1, double ang2) {
-      set(r * cos(ang1) * cos(ang2),
-          r * cos(ang1) * sin(ang2),
-          r * sin(ang1));
-    }
-
-    void angular() {
-      angular(x, y, z);
-    }
-
-    void set_min(Point &p) {
-      x = min(x, p.x);
-      y = min(y, p.y);
-      z = min(z, p.z);
-    }
-
-    void set_max(Point &p) {
-      x = max(x, p.x);
-      y = max(y, p.y);
-      z = max(z, p.z);
-    }
-
-    Point& operator+=(const Point &p) {
-      x += p.x;
-      y += p.y;
-      z += p.z;
-      return *this;
-    }
-
-    Point& operator-=(const Point &p) {
-      x -= p.x;
-      y -= p.y;
-      z -= p.z;
-      return *this;
-    }
-
-    Point& operator*=(const double f) {
-      x *= f;
-      y *= f;
-      z *= f;
-      return *this;
-    }
-
-
-    void glVertex3d() {
-      ::glVertex3d(x, y, z);
-    }
-
-    void glTranslated() {
-      ::glTranslated(x, y, z);
-    }
-
-    void print() {
-      printf("x%f y%f z%f\n", x, y, z);
     }
 
     void draw(double alpha=1., double greying=0) {
       c.glColor(alpha, greying);
       glVertex3d();
     }
+};
+
+class DrawAs {
+  public:
+    DrawAs() {}
+    void draw(vector<Point> &points);
+};
+
+
+class AsLines : DrawAs {
+  public:
+    AsLines() : DrawAs() {}
+    void draw(vector<Point> &points)
+    {
+      int l;
+
+      glBegin(GL_LINES);
+
+      l = points.size();
+      for (int i = 1; i < l; i++) {
+        points[i-1].draw();
+        points[i].draw();
+      }
+
+      glEnd();
+    }
+};
+
+class AsTriangles : DrawAs {
+  public:
+    void draw(vector<Point> &points)
+    {
+      int l;
+      glBegin(GL_TRIANGLES);
+
+      l = points.size();
+      for (int i = 2; i < l; i++) {
+        points[i-2].draw();
+        points[i-1].draw();
+        points[i].draw();
+      }
+
+      glEnd();
+    }
+};
+
+class AsTets : DrawAs {
+  public:
+    void draw(vector<Point> &points)
+    {
+      int l;
+      glBegin(GL_TRIANGLES);
+
+      l = points.size();
+      for (int i = 3; i < l; i += 2) {
+        points[i-3].draw();
+        points[i-2].draw();
+        points[i-1].draw();
+
+        points[i-3].draw();
+        points[i-2].draw();
+        points[i].draw();
+
+        points[i-3].draw();
+        points[i-1].draw();
+        points[i].draw();
+
+        points[i-2].draw();
+        points[i-1].draw();
+        points[i].draw();
+      }
+
+      glEnd();
+    }
+};
+
+
+class AsPotatoe : DrawAs {
+  public:
+    void draw(vector<Point> &points)
+    {
+      int l;
+      glBegin(GL_POLYGON);
+
+      l = points.size();
+      for (int i = 0; i < l; i ++) {
+        points[i].draw();
+      }
+
+      glEnd();
+    }
+};
+
+
+class Particle {
+  public:
+    Pt pos;
+    Pt dir;
+    Pt scale;
+
+    vector<Point> points;
+
+    Particle() {}
+
+    void draw(DrawAs &as) { 
+      glPushMatrix();
+      dir.glRotated();
+      scale.glScaled();
+      pos.glTranslated();
+
+      as.draw(points);
+
+      glPopMatrix();
+    }
+};
+
+
+class Motion {
+  public:
+    bool done;
+
+    Motion() {
+      done = false;
+    }
+
+    void step();
 };
 
 class Dragon {
@@ -219,7 +397,7 @@ class Dragon {
           q.z *= fold; \
           q._ang += angle_accum; \
           angle_accum += angle_zero; \
-          q.angular(); \
+          q.ang2cart(); \
           q *= _r; \
           p += q; \
           p.c.set( pal.colors[ (int)((double)i / n_segments * pal.len) ] ); \
@@ -269,6 +447,22 @@ class Dragon {
       for (int i = 2; i < l; i++) {
         points2[i-2].draw(alpha);
         points2[i-1].draw(alpha);
+        points2[i].draw(alpha);
+      }
+      glEnd();
+    }
+
+    void draw_polys(double alpha=1) {
+      int l;
+      glBegin(GL_POLYGON);
+
+      l = points1.size();
+      for (int i = 0; i < l; i++) {
+        points1[i].draw(alpha);
+      }
+
+      l = points2.size();
+      for (int i = 0; i < l; i++) {
         points2[i].draw(alpha);
       }
       glEnd();
@@ -572,7 +766,8 @@ void draw_scene()
         glPushMatrix();
         sphere_points[j].glTranslated();
         if (animation.triangles_alpha > .01)
-          animation.dragons[j % animation.dragons.size()].draw_triangles(animation.triangles_alpha);
+          //animation.dragons[j % animation.dragons.size()].draw_triangles(animation.triangles_alpha);
+          animation.dragons[j % animation.dragons.size()].draw_polys(animation.triangles_alpha);
         if (animation.lines_alpha > .01)
         {
           double lines_scale = animation.lines_scale;
@@ -655,7 +850,7 @@ void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
           {
             double dragon_points = (1. + axis_val)/2;
             dragon_points *= dragon_points;
-            dragon_points = 2. + dragon_points * 240;
+            dragon_points = 2. + dragon_points * 24;
             animation.dragon_points = dragon_points;
           }
           break;
@@ -708,7 +903,7 @@ void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
           animation.dragon_r.change = -axis_val / 10;
           break;
         case 3:
-          animation.rotate_shift.change = .003 + .01 * axis_val;
+          animation.rotate_shift.change = .0001 + .01 * axis_val;
           break;
         case 4:
           animation.distance.change = -(fabs(axis_val) < .05? 0. :
