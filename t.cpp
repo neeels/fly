@@ -17,6 +17,7 @@ using namespace std;
 #include "palettes.h"
 
 #define Pf(V) printf(#V "=%f\n", (float)V)
+#define Pi(V) printf(#V "=%d\n", (int)V)
 
 
 void draw_scene();
@@ -52,6 +53,12 @@ class Pt {
       this->z = z;
     }
 
+    void random() {
+      x = -1. + 2.*frandom();
+      y = -1. + 2.*frandom();
+      z = -1. + 2.*frandom();
+    }
+
     void ang2cart(double r, double ang1, double ang2) {
       set(r * cos(ang1) * cos(ang2),
           r * cos(ang1) * sin(ang2),
@@ -83,6 +90,12 @@ class Pt {
       }
     }
 
+    void scale3(Pt &p) {
+      x *= p.x;
+      y *= p.y;
+      z *= p.z;
+    }
+
     void set_min(Pt &p) {
       x = min(x, p.x);
       y = min(y, p.y);
@@ -109,10 +122,31 @@ class Pt {
       return *this;
     }
 
+    Pt& operator+=(const double f) {
+      x += f;
+      y += f;
+      z += f;
+      return *this;
+    }
+
+    Pt& operator-=(const double f) {
+      x -= f;
+      y -= f;
+      z -= f;
+      return *this;
+    }
+
     Pt& operator*=(const double f) {
       x *= f;
       y *= f;
       z *= f;
+      return *this;
+    }
+
+    Pt& operator/=(const double f) {
+      x /= f;
+      y /= f;
+      z /= f;
       return *this;
     }
 
@@ -174,19 +208,17 @@ class Color {
       this->b = rgb.b;
     }
 
-    void random(double cmin, double cmax) {
+    void random(double cmin=.3, double cmax=1.) {
       r = frandom();
       g = frandom();
       b = frandom();
       a = 1;
+      double is_intens = max(.01, (r + g + b) / 3.);
+      double intens_change = (cmin + (cmax-cmin)*frandom()) / is_intens;
 
-      double mi = min(r, min(g, b));
-      double ma = max(.1, max(r, max(g, b)) - mi);
-      double intens = (cmax-cmin)*frandom();
-      r = cmin + intens * ((r - mi) / ma);
-      g = cmin + intens * ((g - mi) / ma);
-      b = cmin + intens * ((b - mi) / ma);
-
+      r = intens_change * r;
+      g = intens_change * g;
+      b = intens_change * b;
     }
 
     void glColor(double alpha=1., double greying=0) {
@@ -200,6 +232,11 @@ class Color {
       else
         ::glColor4f(r, g, b, alpha);
     }
+
+    void print() {
+      printf("r%f g%f b%f a%f\n", r,g,b,a);
+    }
+
 };
 
 
@@ -210,20 +247,270 @@ class Point : public Pt{
     Color c;
 
     Point() : Pt() {
-      c.random(.3, 1);
+      c.random();
     }
 
     Point(double x, double y, double z) : Pt(x, y, z) {
-      c.random(.3, 1);
+      c.random();
     }
 
     void draw(double alpha=1., double greying=0) {
       c.glColor(alpha, greying);
       glVertex3d();
     }
+
+    void random() {
+      Pt::random();
+      c.random();
+    }
 };
 
-class Particle;
+
+class FilterContext {
+  public:
+    int point_i;
+    int color_i;
+    int face_i;
+    int particle_i;
+    int cloud_i;
+    int frame_i;
+
+    GLenum what;
+
+    FilterContext() {
+      clear();
+      frame_i = 0;
+    }
+
+    void clear() {
+      point_i = 0;
+      color_i = 0;
+      face_i = 0;
+      particle_i = 0;
+      cloud_i = 0;
+      what = -1;
+    }
+};
+
+class Filter {
+  public:
+    FilterContext *fc;
+
+    Filter() {
+      fc = NULL;
+    }
+
+    virtual void ign() {};
+};
+
+typedef enum {
+  level_unknown = 0,
+  level_camera,
+  level_cloud,
+  level_particle
+} level_e;
+
+
+class PointFilter : public Filter {
+  public:
+    virtual void point(Pt &p) = 0;
+};
+
+class ColorFilter : public Filter {
+  public:
+    virtual void color(Color &c) = 0;
+};
+
+class TranslateFilter : public Filter {
+  public:
+    virtual void translate(Pt &p, level_e l) = 0;
+};
+
+class RotateFilter : public Filter {
+  public:
+    virtual void rotate(Pt &p, level_e l) = 0;
+};
+
+class ScaleFilter : public Filter {
+  public:
+    virtual void scale(Pt &p, level_e l) = 0;
+};
+
+template <typename V, typename T>
+void vector_rm(V &v, T &item) {
+  typename V::iterator i = v.begin();
+  for (; i != v.end(); i++) {
+    if (*i == item) {
+      v.erase(i);
+      return;
+    }
+  }
+}
+
+class DrawBank {
+  public:
+    FilterContext fc;
+
+    vector<PointFilter*> point_filters;
+    vector<ColorFilter*> color_filters;
+    vector<TranslateFilter*> translate_filters;
+    vector<RotateFilter*> rotate_filters;
+    vector<ScaleFilter*> scale_filters;
+
+    void start() {
+      fc.clear();
+    }
+
+    void add(Filter &f) {
+      add(&f);
+    }
+
+    void add(Filter *f) {
+      if (dynamic_cast<PointFilter*>(f)) {
+        f->fc = &fc;
+        point_filters.push_back((PointFilter*)f);
+      }
+      else if (dynamic_cast<ColorFilter*>(f)) {
+        f->fc = &fc;
+        color_filters.push_back((ColorFilter*)f);
+      }
+      else if (dynamic_cast<TranslateFilter*>(f)) {
+        f->fc = &fc;
+        translate_filters.push_back((TranslateFilter*)f);
+      }
+      else if (dynamic_cast<RotateFilter*>(f)) {
+        f->fc = &fc;
+        rotate_filters.push_back((RotateFilter*)f);
+      }
+      else if (dynamic_cast<ScaleFilter*>(f)) {
+        f->fc = &fc;
+        scale_filters.push_back((ScaleFilter*)f);
+      }
+    }
+
+    void remove(Filter &f) {
+      remove(&f);
+    }
+
+    void remove(Filter *f) {
+      if (dynamic_cast<PointFilter*>(f)) {
+        f->fc = &fc;
+        PointFilter *ff = (PointFilter*)f;
+        vector_rm<vector<PointFilter*>,PointFilter*>(point_filters, ff);
+      }
+      else if (dynamic_cast<ColorFilter*>(f)) {
+        f->fc = &fc;
+        ColorFilter *ff = (ColorFilter*)f;
+        vector_rm<vector<ColorFilter*>,ColorFilter*>(color_filters, ff);
+      }
+      else if (dynamic_cast<TranslateFilter*>(f)) {
+        f->fc = &fc;
+        TranslateFilter *ff = (TranslateFilter*)f;
+        vector_rm<vector<TranslateFilter*>,TranslateFilter*>(translate_filters, ff);
+      }
+      else if (dynamic_cast<RotateFilter*>(f)) {
+        f->fc = &fc;
+        RotateFilter *ff = (RotateFilter*)f;
+        vector_rm<vector<RotateFilter*>,RotateFilter*>(rotate_filters, ff);
+      }
+      else if (dynamic_cast<ScaleFilter*>(f)) {
+        f->fc = &fc;
+        ScaleFilter *ff = (ScaleFilter*)f;
+        vector_rm<vector<ScaleFilter*>,ScaleFilter*>(scale_filters, ff);
+      }
+    }
+
+    void point(Pt &p) {
+      if (point_filters.size()) {
+        Pt q = p;
+        for (int i = 0; i < point_filters.size(); i++)
+          point_filters[i]->point(q);
+        q.glVertex3d();
+      }
+      else
+        p.glVertex3d();
+      fc.point_i ++;
+    }
+
+    void color(Color &c) {
+      if (color_filters.size()) {
+        Color d = c;
+        for (int i = 0; i < color_filters.size(); i++)
+          color_filters[i]->color(d);
+        d.glColor();
+      }
+      else
+        c.glColor();
+      fc.color_i ++;
+    }
+
+    void color_point(Point &p) {
+      color(p.c);
+      point(p);
+    }
+
+    void translate(Pt &p, level_e l) {
+      if (translate_filters.size()) {
+        Pt q = p;
+        for (int i = 0; i < translate_filters.size(); i++)
+          translate_filters[i]->translate(q, l);
+        q.glTranslated();
+      }
+      else
+        p.glTranslated();
+    }
+
+    void rotate(Pt &p, level_e l) {
+      if (rotate_filters.size()) {
+        Pt q = p;
+        for (int i = 0; i < rotate_filters.size(); i++)
+          rotate_filters[i]->rotate(q, l);
+        q.glRotated();
+      }
+      else
+        p.glRotated();
+    }
+
+    void scale(Pt &p, level_e l) {
+      if (scale_filters.size()) {
+        Pt q = p;
+        for (int i = 0; i < scale_filters.size(); i++)
+          scale_filters[i]->scale(q, l);
+        q.glScaled();
+      }
+      else
+        p.glScaled();
+    }
+
+    void begin(GLenum what) {
+      fc.what = what;
+      glBegin(what);
+    }
+
+    void end() {
+      glEnd();
+      fc.what = -1;
+    }
+
+    void end_of_face() {
+      fc.face_i ++;
+    }
+
+    void end_of_particle() {
+      fc.particle_i ++;
+    }
+
+    void end_of_cloud() {
+      fc.face_i ++;
+    }
+
+    void end_of_frame() {
+      fc.frame_i ++;
+      fc.clear();
+    }
+};
+
+
 
 class DrawAs {
   public:
@@ -233,53 +520,85 @@ class DrawAs {
       alpha = 1;
     }
 
-    void draw(vector<Point> &points);
+    virtual void draw(vector<Point> &points, DrawBank &d) = 0;
 };
 
 
-class AsLines : DrawAs {
+class AsLines : public DrawAs {
   public:
     AsLines() : DrawAs() {}
-    void draw(vector<Point> &points)
+    virtual void draw(vector<Point> &points, DrawBank &d)
     {
       int l;
 
-      glBegin(GL_LINES);
+      d.begin(GL_LINES);
 
       l = points.size();
       for (int i = 1; i < l; i++) {
-        points[i-1].draw(alpha);
-        points[i].draw(alpha);
+        d.color_point(points[i-1]);
+        d.color_point(points[i]);
+        d.end_of_face();
       }
+      d.color_point(points.back());
+      d.color_point(points.front());
+      d.end_of_face();
 
-      glEnd();
+      d.end();
     }
 };
 
-class AsTriangles : DrawAs {
+class AsTriangles : public DrawAs {
   public:
-    void draw(vector<Point> &points)
+    virtual void draw(vector<Point> &points, DrawBank &d)
     {
       int l;
-      glBegin(GL_TRIANGLES);
+      d.begin(GL_TRIANGLES);
 
       l = points.size();
       for (int i = 2; i < l; i++) {
-        points[i-2].draw(alpha);
-        points[i-1].draw(alpha);
-        points[i].draw(alpha);
+        d.color_point(points[i-2]);
+        d.color_point(points[i-1]);
+        d.color_point(points[i]);
+        d.end_of_face();
       }
 
-      glEnd();
+      d.end();
     }
 };
 
-class AsTets : DrawAs {
+class AsTets : public DrawAs {
   public:
-    void draw(vector<Point> &points)
+    virtual void draw(vector<Point> &points, DrawBank &d)
     {
       int l;
-      glBegin(GL_TRIANGLES);
+#if 1
+      d.begin(GL_TRIANGLES);
+
+      l = points.size();
+      for (int i = 3; i < l; i += 2) {
+        d.color_point(points[i-3]);
+        d.color_point(points[i-2]);
+        d.color_point(points[i-1]);
+        d.end_of_face();
+
+        d.color_point(points[i-3]);
+        d.color_point(points[i-2]);
+        d.color_point(points[i]);
+        d.end_of_face();
+
+        d.color_point(points[i-3]);
+        d.color_point(points[i-1]);
+        d.color_point(points[i]);
+        d.end_of_face();
+
+        d.color_point(points[i-2]);
+        d.color_point(points[i-1]);
+        d.color_point(points[i]);
+        d.end_of_face();
+      }
+#else
+
+      glBegin(GL_TRIANGLE_STRIP);
 
       l = points.size();
       for (int i = 3; i < l; i += 2) {
@@ -287,37 +606,35 @@ class AsTets : DrawAs {
         points[i-2].draw(alpha);
         points[i-1].draw(alpha);
 
-        points[i-3].draw(alpha);
-        points[i-2].draw(alpha);
         points[i].draw(alpha);
 
         points[i-3].draw(alpha);
-        points[i-1].draw(alpha);
-        points[i].draw(alpha);
 
         points[i-2].draw(alpha);
-        points[i-1].draw(alpha);
-        points[i].draw(alpha);
+
       }
+#endif
 
       glEnd();
     }
 };
 
 
-class AsPoly : DrawAs {
+class AsPoly : public DrawAs {
   public:
-    void draw(vector<Point> &points)
+    AsPoly() : DrawAs() {}
+    virtual void draw(vector<Point> &points, DrawBank &d)
     {
       int l;
-      glBegin(GL_POLYGON);
+      d.begin(GL_POLYGON);
 
       l = points.size();
       for (int i = 0; i < l; i ++) {
-        points[i].draw(alpha);
+        d.color_point(points[i]);
       }
+      d.end_of_face();
 
-      glEnd();
+      d.end();
     }
 };
 
@@ -326,12 +643,32 @@ class Placed {
     Pt pos;
     Pt dir;
     Pt scale;
+    level_e level;
 
-    void gl_placement() {
-      dir.glRotated();
-      scale.glScaled();
-      pos.glTranslated();
+    Placed() {
+      pos.set(0, 0, 0);
+      dir.set(0, 0, 0);
+      scale.set(1, 1, 1);
+      level = level_unknown;
     }
+
+    void placement(DrawBank &d) {
+      d.translate(pos, level);
+      d.rotate(dir, level);
+      d.scale(scale, level);
+    }
+
+    void draw(DrawAs &as, DrawBank &d) { 
+      glPushMatrix();
+      placement(d);
+
+      _draw(as, d);
+
+      glPopMatrix();
+    }
+
+    virtual void _draw(DrawAs &as, DrawBank &d) = 0;
+
 };
 
 
@@ -339,15 +676,18 @@ class Particle : public Placed {
   public:
     vector<Point> points;
 
-    Particle() {}
+    Particle() {
+      level = level_particle;
+    }
 
-    void draw(DrawAs &as) { 
-      glPushMatrix();
-      gl_placement();
+    virtual void _draw(DrawAs &as, DrawBank &d) {
+      as.draw(points, d);
+      d.end_of_particle();
+    }
 
-      as.draw(points);
-
-      glPopMatrix();
+    Point &add_point() {
+      points.resize(points.size() + 1);
+      return points.back();
     }
 };
 
@@ -355,31 +695,211 @@ class Particle : public Placed {
 class Cloud : public Placed {
   public:
     vector<Particle> particles;
-    vector<DrawAs> painters;
 
     Cloud()
-    {}
+    {
+      level = level_cloud;
+    }
 
     Particle &add_particle() {
       particles.resize( particles.size() + 1 );
       return particles.back();
     }
 
-    void draw(DrawAs &as) { 
-      glPushMatrix();
-      gl_placement();
-
+    virtual void _draw(DrawAs &as, DrawBank &d) { 
       for (int i = 0; i < particles.size(); i++) {
-        particles[i].draw(as);
+        particles[i].draw(as, d);
       }
-
-      glPopMatrix();
+      d.end_of_cloud();
     }
 
-    void draw() {
-      for (int i = 0; i < painters.size(); i++) {
-        draw( painters[i] );
+    void step() {
+    }
+
+};
+
+class ParticleGenesis {
+  public:
+    virtual void generate(Cloud &in) = 0;
+};
+
+class PointGenesis {
+  public:
+    virtual void generate(Particle &in) = 0;
+};
+
+class RandomPoints : public PointGenesis {
+  public:
+    int n;
+    RandomPoints() {
+      n = 4;
+    }
+
+    virtual void generate(Particle &in) {
+      for (int i = 0; i < n; i++) {
+        Point &p = in.add_point();
+        p.random();
       }
+    }
+};
+
+class RandomParticles : public ParticleGenesis {
+  public:
+    int n;
+    double pos_range;
+    double scale_min, scale_max;
+    Pt dir_range;
+    PointGenesis *point_genesis;
+
+    RandomParticles() {
+      defaults();
+      point_genesis = NULL;
+    }
+
+    RandomParticles(PointGenesis *point_genesis) {
+      defaults();
+      this->point_genesis = point_genesis;
+    }
+
+    void defaults() {
+      n = 50;
+      pos_range = 10.;
+      scale_min = -1.;
+      scale_max = 1.;
+      dir_range.set(360., 360., 360.);
+    }
+
+    virtual void generate(Cloud &in) {
+      for (int i = 0; i < n; i++) {
+        Particle &p = in.add_particle();
+        p.pos.random();
+        p.pos *= pos_range;
+
+        p.scale.random();
+        p.scale /= scale_max - scale_min;
+        p.scale += scale_min;
+
+        p.dir.random();
+        p.dir.scale3(dir_range);
+
+        if (point_genesis) {
+          point_genesis->generate(p);
+        }
+
+      }
+    }
+};
+
+
+class Quake : public TranslateFilter {
+  public:
+    double strength;
+    double decay;
+    level_e on_level;
+    int seen_frame;
+
+    Quake() {
+      strength = .5;
+      decay = .2;
+      on_level = level_particle;
+      seen_frame = 0;
+    }
+
+    virtual void translate(Pt &p, level_e l) {
+      if (seen_frame != fc->frame_i) {
+        seen_frame = fc->frame_i;
+        strength *= 1. - min(1., max(0., decay));
+      }
+
+      if ((strength > 1e-4) && (l == on_level)) {
+        Pt q;
+        q.random();
+        q *= strength;
+
+        p += q;
+      }
+    };
+};
+
+class Scale : public ScaleFilter {
+  public:
+    Pt factor;
+    level_e on_level;
+
+    Scale() {
+      on_level = level_particle;
+      factor.set(1, 1, 1);
+    }
+
+    virtual void scale(Pt &p, level_e l){
+      if (l == on_level) {
+        p.scale3(factor);
+      }
+    }
+};
+
+class Explode : public PointFilter {
+  public:
+    double speed;
+    double decay;
+    int spread;
+    int _faces;
+    bool _reverse;
+
+    vector<Pt> sum;
+    vector<double> speeds;
+
+    Explode() {
+      speed = .1;
+      decay = .99;
+      spread = 5;
+      _faces = 0;
+      _reverse = false;
+    }
+
+    virtual void point(Pt &p) {
+      int face_i = fc->face_i;
+
+      if (! face_i)
+        _faces += spread;
+
+      if (face_i > _faces)
+        return;
+
+      if (_reverse) {
+        if (face_i >= sum.size())
+          return;
+        sum[face_i] /= 1. + speed;
+      }
+      else {
+        int have = sum.size();
+        if (sum.size() < (face_i+1)) {
+          sum.resize(face_i + 1);
+          speeds.resize(face_i + 1);
+          for (int i = have; i < sum.size(); i++) {
+            sum[i].random();
+            speeds[i] = speed;
+          }
+        }
+
+        sum[face_i] *= 1. + speeds[face_i];
+        speeds[face_i] *= decay;
+      }
+      p += sum[face_i];
+    }
+
+    void reverse() {
+      for (int i = 0; i < speeds.size(); i++) {
+        speeds[i] = - speed;
+      }
+      _reverse = true;
+    }
+
+    void clear() {
+      sum.clear();
+      speeds.clear();
+      _faces = 0;
+      _reverse = false;
     }
 };
 
@@ -396,125 +916,6 @@ class Motion {
     void step();
 };
 
-class Dragon {
-  public:
-
-
-    vector<Point> segments;
-
-    vector<Point> points1;
-    vector<Point> points2;
-
-    double maxangle;
-
-    Dragon()
-    {
-      maxangle = M_PI * .9;
-    }
-
-    void update(double f_segments, double r, double fold, double alpha, double angle_zero,
-                palette_t &pal)
-    {
-      Point p;
-
-      int n_segments = (int)ceil(f_segments);
-      n_segments = max(1, n_segments);
-
-      if (segments.size() < n_segments) {
-        for (int i = segments.size(); i < n_segments; i++) {
-          p.set(frandom()*.9 + 5.1,
-                (frandom() - .5)*2 * maxangle + (M_PI/3),
-                (frandom() - .5)*2 * maxangle + (M_PI/3));
-          p.c.random(.3, 1);
-          segments.push_back( p );
-        }
-      }
-
-
-#define do_points(_points, _r, _ang) \
-      { \
-        double angle_accum = 0; \
-        p.set(0, 0, 0); \
-        p.c.set( pal.colors[0] ); \
-        _points.clear(); \
-        _points.push_back(p); \
-        for (int i = 0; i < n_segments; i += 2) { \
-          Point q = segments[i]; \
-          q.y *= fold; \
-          q.z *= fold; \
-          q._ang += angle_accum; \
-          angle_accum += angle_zero; \
-          q.ang2cart(); \
-          q *= _r; \
-          p += q; \
-          p.c.set( pal.colors[ (int)((double)i / n_segments * pal.len) ] ); \
-          p.c.a = alpha; \
-          _points.push_back(p); \
-        } \
-      }
-
-
-      do_points(points1, r, y);
-      do_points(points2, -r, z);
-      
-    }
-
-    void draw_lines(double alpha=1.) {
-      int l;
-
-      glBegin(GL_LINES);
-
-      l = points1.size();
-      for (int i = 1; i < l; i++) {
-        points1[i-1].draw(alpha);
-        points1[i].draw(alpha);
-      }
-
-      l = points2.size();
-      for (int i = 1; i < l; i++) {
-        points2[i-1].draw(alpha);
-        points2[i].draw(alpha);
-      }
-
-      glEnd();
-    }
-
-    void draw_triangles(double alpha=1) {
-      int l;
-      glBegin(GL_TRIANGLES);
-
-      l = points1.size();
-      for (int i = 2; i < l; i++) {
-        points1[i-2].draw(alpha);
-        points1[i-1].draw(alpha);
-        points1[i].draw(alpha);
-      }
-
-      l = points2.size();
-      for (int i = 2; i < l; i++) {
-        points2[i-2].draw(alpha);
-        points2[i-1].draw(alpha);
-        points2[i].draw(alpha);
-      }
-      glEnd();
-    }
-
-    void draw_polys(double alpha=1) {
-      int l;
-      glBegin(GL_POLYGON);
-
-      l = points1.size();
-      for (int i = 0; i < l; i++) {
-        points1[i].draw(alpha);
-      }
-
-      l = points2.size();
-      for (int i = 0; i < l; i++) {
-        points2[i].draw(alpha);
-      }
-      glEnd();
-    }
-};
 
 
 class Param {
@@ -632,7 +1033,18 @@ class Animation {
     double palette_blend;
     bool stop_palette_transition;
 
-    vector<Dragon> dragons;
+    vector<Cloud> clouds;
+
+    AsTriangles as_triangles;
+    AsLines as_lines;
+    AsPoly as_poly;
+    AsTets as_tets;
+
+    DrawBank bank;
+    Quake quake;
+    Explode explode;
+    Scale particle_scale;
+
 
     Animation(int n_dragons = 3) {
       is_palette = &palettes[0];
@@ -672,11 +1084,25 @@ class Animation {
       palette_selected.slew = 0;
       palette_blend_speed = .6;
 
-      Dragon d;
-      for (int i = 0; i < n_dragons; i++) {
-        dragons.push_back(d);
-        dragons.back().update(dragon_points, dragon_r, dragon_fold, alpha, angle_zero, palette);
+      clouds.resize(1);
+      {
+        Cloud &c = clouds[0];
+
+        RandomPoints rpo;
+        RandomParticles rpa(&rpo);
+        rpa.scale_min = 10;
+        rpa.scale_max = 20;
+
+        rpa.generate(c);
+        c.pos.set(-10, 0, 0);
+
+        clouds.push_back(c);
+        clouds[1].pos.set(10, 0, 0);
+        clouds[1].scale.set(-1, 1, 1);
       }
+
+      bank.add(quake);
+      bank.add(particle_scale);
     }
 
     void step() {
@@ -744,15 +1170,27 @@ class Animation {
           stop_palette_transition = true;
       }
 
-      for (int i = 0; i < dragons.size(); i++) {
-        dragons[i].update(dragon_points, dragon_r, dragon_fold, alpha, angle_zero, palette);
+      for (int i = 0; i < clouds.size(); i++) {
+        clouds[i].step();
       }
 
       palette_selected = -1;
+
+      clouds[0].dir.y -= .3;
+      clouds[1].dir.y += .3;
+    }
+
+
+    void draw() {
+      for (int i = 0; i < clouds.size(); i++) {
+        clouds[i].draw(as_tets, bank);
+      }
+      bank.end_of_frame();
     }
 };
 
 Animation animation;
+
 
 
 
@@ -764,9 +1202,9 @@ void draw_scene()
   glLoadIdentity( );
 
   double vision = animation.vision;
-  gluLookAt(3,4,260 - vision*200,0,0,vision * vision * 60,0,0,1);
+  gluLookAt(0,3,20 + vision*200,0,0,vision * vision * 60,0,0,1);
 
-  double sc = 1;
+  double sc = animation.lines_scale;
 
   double angleZ = animation.rot_z;
   double angleX = animation.rot_x;
@@ -775,58 +1213,8 @@ void draw_scene()
   glRotated(angleZ,0,1,0);
   glRotated(angleX,1,0,0);
 
-  double rotate_shift = animation.rotate_shift;
-  int n_onion_shells = 100;
-  for (int i = 0; i < n_onion_shells; i++) {
-    double dd = i * (animation.distance + .4 * sin(rotate_shift * 1.23));
-    dd /= sc;
-    double d = dd * .33;
 
-    glPushMatrix();
-      glRotated(i * (16.789 + rotate_shift),1,sin(rotate_shift),.25 * cos(rotate_shift));
-
-      double K = animation.dist_scale;
-      double sc2 = 1. + K - 2.*K * i / n_onion_shells;
-      glScaled(sc2,sc2,sc2);
-
-      dd /= sc2;
-      d /= sc2;
-
-      double z1, z2;
-      if (i & (int)1) {
-        z1 = -d;
-        z2 = dd;
-      }
-      else {
-        z1 = dd;
-        z2 = -d;
-      }
-
-      const int n_sphere_points = 4;
-      Point sphere_points[n_sphere_points] = {
-          Point(dd, 0., z1),
-          Point(-d, d, z1),
-          Point(-d, -d, z1),
-          Point(0, 0, z2)
-        };
-
-      for (int j = 0; j < n_sphere_points; j++) {
-        glPushMatrix();
-        sphere_points[j].glTranslated();
-        if (animation.triangles_alpha > .01)
-          //animation.dragons[j % animation.dragons.size()].draw_triangles(animation.triangles_alpha);
-          animation.dragons[j % animation.dragons.size()].draw_polys(animation.triangles_alpha);
-        if (animation.lines_alpha > .01)
-        {
-          double lines_scale = animation.lines_scale;
-          glScaled(lines_scale, lines_scale, lines_scale);
-          animation.dragons[j % animation.dragons.size()].draw_lines(animation.lines_alpha);
-        }
-        glPopMatrix();
-      }
-
-    glPopMatrix();
-  }
+  animation.draw();
 
   glFlush();
   SDL_GL_SwapBuffers();
@@ -948,7 +1336,7 @@ void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
           animation.dragon_fold.change = (axis_val*axis_val*axis_val) / 30;
           break;
         case 1:
-          animation.dragon_r.change = -axis_val / 10;
+          animation.particle_scale.factor.y = 1. + axis_val;
           break;
         case 3:
           animation.rotate_shift.change = .0001 + .01 * axis_val;
@@ -975,6 +1363,27 @@ void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
 
 void on_joy_button(ControllerState &ctrl, int button, bool down) {
   switch(ctrl.selected_layer) {
+
+    case 0:
+      if (down) {
+        switch(button) {
+          case 2:
+            animation.quake.strength = 1.;
+            break;
+          case 0:
+            animation.explode.clear();
+            animation.bank.remove(animation.explode);
+            animation.bank.add(animation.explode);
+            break;
+          case 1:
+            animation.explode.reverse();
+            break;
+          case 3:
+            animation.bank.remove(animation.explode);
+            break;
+        }
+      }
+      break;
 
     case 3:
       switch(button) {
@@ -1210,8 +1619,9 @@ int main(int argc, char *argv[])
 
   while (running)
   {
-    animation.step();
 
+
+    animation.step();
     draw_scene();
     frames_rendered ++;
 
