@@ -208,6 +208,14 @@ class Color {
       this->b = rgb.b;
     }
 
+    void blend(Color &c, double fade) {
+      double rfade = 1.0 - fade;
+      r = rfade * r  +  fade * c.r;
+      g = rfade * g  +  fade * c.g;
+      b = rfade * b  +  fade * c.b;
+      a = rfade * a  +  fade * c.a;
+    }
+
     void random(double cmin=.3, double cmax=1.) {
       r = frandom();
       g = frandom();
@@ -800,7 +808,7 @@ class Quake : public TranslateFilter {
 
     Quake() {
       strength = .5;
-      decay = .2;
+      decay = 0.1;
       on_level = level_particle;
       seen_frame = 0;
     }
@@ -851,8 +859,8 @@ class Explode : public PointFilter {
 
     Explode() {
       speed = .1;
-      decay = .99;
-      spread = 5;
+      decay = .97;
+      spread = 10;
       _faces = 0;
       _reverse = false;
     }
@@ -900,6 +908,77 @@ class Explode : public PointFilter {
       speeds.clear();
       _faces = 0;
       _reverse = false;
+    }
+};
+
+class ChangeColor : public ColorFilter {
+  public:
+    int n_cycle;
+    palette_t *pal;
+
+    ChangeColor() {
+      n_cycle = 50;
+      pal = NULL;
+    }
+
+    virtual void color(Color &c) {
+      double col = (double)fc->color_i / n_cycle;
+      c.set( pal->colors[(int)(col * pal->len) & PALETTE_LEN_MASK] );
+    }
+};
+
+class StrobeCloud : public ColorFilter {
+  public:
+    Color dark;
+    Color bright;
+    int n_cycle;
+    int n_flash;
+    int n_blend;
+    int which_mask;
+    bool trigger;
+
+    StrobeCloud() {
+      dark.set(0, 0.1, 1, 0.01);
+      bright.set(1, 1, 1, 1);
+      which_mask = 0xff;
+      n_cycle = 6;
+      n_flash = 2;
+      n_blend = 13;
+    }
+
+    int seen_frame;
+    int which;
+    int cycle;
+    double fcycle;
+
+    virtual void color(Color &c) {
+      if (seen_frame != fc->frame_i) {
+        seen_frame = fc->frame_i;
+
+        if (cycle >= n_cycle) {
+          cycle = 0;
+          which = random() & which_mask;
+        }
+        else {
+          cycle ++;
+        }
+        fcycle = max(0., 1. - ((double)cycle / n_flash));
+      }
+
+      double a = .1;
+      //c = dark;
+      //a = dark.a;
+
+      int d = abs((which) - (fc->particle_i & which_mask));
+      
+      if (d <= n_blend) {
+        double blend = 1. - (double)d / n_blend;
+        blend *= blend;
+        a += (1. - a) * fcycle * blend;
+        //c.blend(bright, fcycle * blend);
+      }
+
+      c.a *= a;
     }
 };
 
@@ -1044,6 +1123,8 @@ class Animation {
     Quake quake;
     Explode explode;
     Scale particle_scale;
+    ChangeColor change_color;
+    StrobeCloud strobe_cloud;
 
 
     Animation(int n_dragons = 3) {
@@ -1090,6 +1171,7 @@ class Animation {
 
         RandomPoints rpo;
         RandomParticles rpa(&rpo);
+        rpa.n = 100;
         rpa.scale_min = 10;
         rpa.scale_max = 20;
 
@@ -1103,6 +1185,10 @@ class Animation {
 
       bank.add(quake);
       bank.add(particle_scale);
+
+      change_color.pal = &palette;
+      bank.add(change_color);
+      bank.add(strobe_cloud);
     }
 
     void step() {
@@ -1336,7 +1422,7 @@ void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
           animation.dragon_fold.change = (axis_val*axis_val*axis_val) / 30;
           break;
         case 1:
-          animation.particle_scale.factor.y = 1. + axis_val;
+          animation.particle_scale.factor.y = 1.1 + axis_val;
           break;
         case 3:
           animation.rotate_shift.change = .0001 + .01 * axis_val;

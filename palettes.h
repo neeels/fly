@@ -6,6 +6,7 @@ extern "C" {
 
 #define PALETTE_LEN_BITS 12
 #define PALETTE_LEN (1 << PALETTE_LEN_BITS)
+#define PALETTE_LEN_MASK (PALETTE_LEN - 1)
 
 typedef struct{
   float r;
