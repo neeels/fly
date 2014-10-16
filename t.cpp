@@ -15,6 +15,7 @@ using namespace std;
 
 #include "ctrl_layers.h"
 #include "palettes.h"
+#include "textures.h"
 
 #define Pf(V) printf(#V "=%f\n", (float)V)
 #define Pi(V) printf(#V "=%d\n", (int)V)
@@ -274,6 +275,20 @@ class Point : public Pt{
 };
 
 
+class Texture {
+  public:
+    GLuint id;
+
+    Texture() {}
+
+    void load(const char *path) {
+      id = load_texture(path, false);
+      printf("Loaded texture %x: %s\n", (int)id, path);
+    }
+};
+
+
+
 class FilterContext {
   public:
     int point_i;
@@ -457,6 +472,10 @@ class DrawBank {
       point(p);
     }
 
+    void texture_coord(double cx, double cy) {
+      ::glTexCoord2d(cx, cy);
+    }
+
     void translate(Pt &p, level_e l) {
       if (translate_filters.size()) {
         Pt q = p;
@@ -539,6 +558,12 @@ class AsLines : public DrawAs {
     {
       int l;
 
+      glLineWidth(2);
+      glEnable( GL_LINE_SMOOTH );
+      //glEnable( GL_POLYGON_SMOOTH );
+      glHint( GL_LINE_SMOOTH_HINT, GL_NICEST );
+      //glHint( GL_POLYGON_SMOOTH_HINT, GL_NICEST );
+
       d.begin(GL_LINES);
 
       l = points.size();
@@ -550,6 +575,25 @@ class AsLines : public DrawAs {
       d.color_point(points.back());
       d.color_point(points.front());
       d.end_of_face();
+
+      d.end();
+    }
+};
+
+class AsPoints : public DrawAs {
+  public:
+    AsPoints() : DrawAs() {}
+    virtual void draw(vector<Point> &points, DrawBank &d)
+    {
+      int l;
+
+      d.begin(GL_POINTS);
+
+      l = points.size();
+      for (int i = 0; i < l; i++) {
+        d.color_point(points[i]);
+        d.end_of_face();
+      }
 
       d.end();
     }
@@ -576,6 +620,12 @@ class AsTriangles : public DrawAs {
 
 class AsTets : public DrawAs {
   public:
+    int pitch;
+
+    AsTets() {
+      pitch = 2;
+    }
+
     virtual void draw(vector<Point> &points, DrawBank &d)
     {
       int l;
@@ -583,7 +633,7 @@ class AsTets : public DrawAs {
       d.begin(GL_TRIANGLES);
 
       l = points.size();
-      for (int i = 3; i < l; i += 2) {
+      for (int i = 3; i < l; i += pitch) {
         d.color_point(points[i-3]);
         d.color_point(points[i-2]);
         d.color_point(points[i-1]);
@@ -645,6 +695,69 @@ class AsPoly : public DrawAs {
       d.end();
     }
 };
+
+class AsQuads : public DrawAs {
+  public:
+    int pitch;
+
+    AsQuads(){
+      pitch = 2;
+    }
+
+    virtual void draw(vector<Point> &points, DrawBank &d)
+    {
+      int l;
+      d.begin(GL_QUADS);
+
+      l = points.size();
+      for (int i = 3; i < l; i += pitch) {
+        d.color_point(points[i-3]);
+        d.color_point(points[i-2]);
+        d.color_point(points[i-1]);
+        d.color_point(points[i]);
+        d.end_of_face();
+      }
+
+      glEnd();
+    }
+};
+
+class AsTexturePlanes : public DrawAs {
+  public:
+    int pitch;
+    Texture *texture;
+
+    AsTexturePlanes() {
+      pitch = 4;
+      texture = NULL;
+    }
+
+    virtual void draw(vector<Point> &points, DrawBank &d)
+    {
+      int l;
+      glEnable(GL_TEXTURE_2D);
+      glBindTexture(GL_TEXTURE_2D, texture->id);
+      d.begin(GL_QUADS);
+
+      l = points.size();
+      for (int i = 3; i < l; i += pitch) {
+        d.texture_coord(0, 0);
+        d.color_point(points[i-3]);
+        d.texture_coord(1, 0);
+        d.color_point(points[i-2]);
+        d.texture_coord(1, 1);
+        d.color_point(points[i-1]);
+        d.texture_coord(0, 1);
+        d.color_point(points[i]);
+        d.end_of_face();
+      }
+
+      glEnd();
+      glDisable(GL_TEXTURE_2D);
+    }
+};
+
+
 
 class Placed {
   public:
@@ -747,7 +860,47 @@ class RandomPoints : public PointGenesis {
       for (int i = 0; i < n; i++) {
         Point &p = in.add_point();
         p.random();
+        p /= 2;
       }
+    }
+};
+
+class Block : public PointGenesis {
+  public:
+    Block() {
+    }
+
+    virtual void generate(Particle &in) {
+#define P(x,y,z) {\
+          Point &p = in.add_point(); \
+          p.set(x, y, z); \
+        }
+
+#define A  P(-.5, -.5, -.5);
+#define B  P(-.5, -.5,  .5);
+#define C  P(-.5,  .5,  .5);
+#define D  P(-.5,  .5, -.5);
+#define E  P( .5, -.5, -.5);
+#define F  P( .5, -.5,  .5);
+#define G  P( .5,  .5,  .5);
+#define H  P( .5,  .5, -.5);
+
+      A B C D
+      A B F E
+      B C G F
+      E F G H
+      C D H G
+      D A E H
+
+#undef A
+#undef B
+#undef C
+#undef D
+#undef E
+#undef F
+#undef G
+#undef H
+#undef P
     }
 };
 
@@ -798,6 +951,81 @@ class RandomParticles : public ParticleGenesis {
     }
 };
 
+#include "font.h"
+
+class WriteInBlocks : public ParticleGenesis {
+  public:
+    const char *text;
+    Pt block_pitch;
+    Pt block_rel_size;
+    PointGenesis *point_genesis;
+
+    WriteInBlocks() {
+      defaults();
+    }
+
+    WriteInBlocks(const char *text) {
+      defaults();
+      this->text = text;
+    }
+
+    void defaults() {
+      text = "written";
+      block_pitch.set(.5, .5, .5);
+      block_rel_size.set(.95, .95, .95);
+    }
+
+    virtual void generate(Cloud &in) {
+      size_t l = strlen(text);
+
+      Pt letter_size(5, 8, 1);
+      letter_size.scale3(block_pitch);
+
+      Pt letter_mid = letter_size;
+      letter_mid /= 2;
+
+      Pt letter_direction(letter_size.x + block_pitch.x/5, 0, 0);
+
+      Pt letter_pos = letter_direction;
+      letter_pos /= -2;
+      letter_pos *= l - 1;
+
+      Pt block_pos;
+
+      Pt block_size = block_pitch;
+      block_size.scale3(block_rel_size);
+
+      for (size_t i = 0; i < l; i++) {
+
+        block_pos = letter_pos;
+        block_pos -= letter_mid;
+
+        const uint8_t *bits = font[ text[i] & 0x7f ];
+
+
+        Pt y0_pos = block_pos;
+        for (int x = 0; x < 5; x++) {
+          block_pos = y0_pos;
+          uint8_t b = bits[x];
+          for (int y = 0; y < 8; y++) {
+            if (b & 1) {
+              Particle &p = in.add_particle();
+              point_genesis->generate(p);
+
+              p.pos = block_pos;
+              p.scale = block_size;
+            }
+            b >>= 1;
+            block_pos.y += block_pitch.y;
+          }
+          y0_pos.x += block_pitch.x;
+        }
+
+        letter_pos += letter_direction;
+      }
+    }
+};
+
 
 class Quake : public TranslateFilter {
   public:
@@ -820,6 +1048,36 @@ class Quake : public TranslateFilter {
       }
 
       if ((strength > 1e-4) && (l == on_level)) {
+        Pt q;
+        q.random();
+        q *= strength;
+
+        p += q;
+      }
+    };
+};
+
+class PointQuake : public PointFilter {
+  public:
+    double strength;
+    double decay;
+    level_e on_level;
+    int seen_frame;
+
+    PointQuake() {
+      strength = .5;
+      decay = 0.1;
+      on_level = level_cloud;
+      seen_frame = 0;
+    }
+
+    virtual void point(Pt &p) {
+      if (seen_frame != fc->frame_i) {
+        seen_frame = fc->frame_i;
+        strength *= 1. - min(1., max(0., decay));
+      }
+
+      if (strength > 1e-4) {
         Pt q;
         q.random();
         q *= strength;
@@ -877,7 +1135,8 @@ class Explode : public PointFilter {
       if (_reverse) {
         if (face_i >= sum.size())
           return;
-        sum[face_i] /= 1. + speed;
+        speeds[face_i] /= decay;
+        sum[face_i] /= 1. + speeds[face_i];
       }
       else {
         int have = sum.size();
@@ -898,7 +1157,7 @@ class Explode : public PointFilter {
 
     void reverse() {
       for (int i = 0; i < speeds.size(); i++) {
-        speeds[i] = - speed;
+        speeds[i] = speed * 5;
       }
       _reverse = true;
     }
@@ -917,7 +1176,7 @@ class ChangeColor : public ColorFilter {
     palette_t *pal;
 
     ChangeColor() {
-      n_cycle = 50;
+      n_cycle = 3000;
       pal = NULL;
     }
 
@@ -936,12 +1195,13 @@ class StrobeCloud : public ColorFilter {
     int n_blend;
     int which_mask;
     bool trigger;
+    int _n_cycle;
 
     StrobeCloud() {
       dark.set(0, 0.1, 1, 0.01);
       bright.set(1, 1, 1, 1);
       which_mask = 0xff;
-      n_cycle = 6;
+      _n_cycle = n_cycle = 6;
       n_flash = 2;
       n_blend = 13;
     }
@@ -955,8 +1215,9 @@ class StrobeCloud : public ColorFilter {
       if (seen_frame != fc->frame_i) {
         seen_frame = fc->frame_i;
 
-        if (cycle >= n_cycle) {
+        if (cycle >= _n_cycle) {
           cycle = 0;
+          _n_cycle = 1 + frandom() * n_cycle;
           which = random() & which_mask;
         }
         else {
@@ -982,6 +1243,32 @@ class StrobeCloud : public ColorFilter {
     }
 };
 
+
+class Revolve : public RotateFilter {
+  public:
+    vector<Pt> state;
+    vector<Pt> sum;
+
+    virtual void rotate(Pt &p, level_e l){
+      if (l == level_particle) {
+
+        int have = state.size();
+        int particle_i = fc->particle_i;
+        if (state.size() < (particle_i+1)) {
+          state.resize(particle_i + 1);
+          sum.resize(particle_i + 1);
+          for (int i = have; i < state.size(); i++) {
+            state[i].random();
+            state[i] *= 10;
+            sum[i].set(0, 0, 0);
+          }
+        }
+
+        sum[particle_i] += state[particle_i];
+        p += sum[particle_i];
+      }
+    }
+};
 
 
 class Motion {
@@ -1112,22 +1399,29 @@ class Animation {
     double palette_blend;
     bool stop_palette_transition;
 
+    Texture dot;
+
     vector<Cloud> clouds;
 
     AsTriangles as_triangles;
     AsLines as_lines;
     AsPoly as_poly;
     AsTets as_tets;
+    AsQuads as_quads;
+    AsTexturePlanes as_texture_planes;
+    AsPoints as_points;
 
     DrawBank bank;
     Quake quake;
+    PointQuake point_quake;
     Explode explode;
     Scale particle_scale;
     ChangeColor change_color;
     StrobeCloud strobe_cloud;
+    Revolve revolve;
 
 
-    Animation(int n_dragons = 3) {
+    Animation() {
       is_palette = &palettes[0];
       want_palette = is_palette;
 
@@ -1138,6 +1432,7 @@ class Animation {
       make_palette(&blended_palette, PALETTE_LEN,
                    palette_defs[0]);
 
+      as_texture_planes.texture = &dot;
 
       dragon_points = 52;
       dragon_points.slew = 0;
@@ -1169,26 +1464,91 @@ class Animation {
       {
         Cloud &c = clouds[0];
 
-        RandomPoints rpo;
-        RandomParticles rpa(&rpo);
-        rpa.n = 100;
-        rpa.scale_min = 10;
-        rpa.scale_max = 20;
+        if (0) {
+          RandomPoints rpo;
+          RandomParticles rpa(&rpo);
+          rpa.n = 100;
+          rpa.scale_min = 10;
+          rpa.scale_max = 20;
 
-        rpa.generate(c);
-        c.pos.set(-10, 0, 0);
+          rpa.generate(c);
+        }
+        if (0)
+        {
+          Particle p;
+          p.points.resize(4);
+          p.points[0].set(-1, -1, 0);
+          p.points[3].set( 1, -1, 0);
+          p.points[2].set( 1,  1, 0);
+          p.points[1].set(-1,  1, 0);
+          p.pos.set(0, 0, -0.5);
 
+          c.particles.push_back(p);
+
+          p.pos.set(0, 0, 0.5);
+          c.particles.push_back(p);
+
+          int i;
+          for (i = 0; i < c.particles.size(); i++) {
+            printf("%p ", &(c.particles[i]));
+            c.particles[i].pos.print();
+            p.points[3].print();
+            printf(" %p\n", &(c.particles[i].pos));
+          }
+          c.particles[1].pos.set(0, 0, .6);
+          for (i = 0; i < c.particles.size(); i++) {
+            printf("%p ", &(c.particles[i]));
+            c.particles[i].pos.print();
+            p.points[3].print();
+            printf(" %p\n", &(c.particles[i].pos));
+          }
+        }
+        if (0)
+        {
+          Particle &p = c.add_particle();
+          p.points.resize(4);
+          p.points[0].set(-1, -1, 0);
+          p.points[1].set( 1, -1, 0);
+          p.points[2].set( 1,  1, 0);
+          p.points[3].set(-1,  1, 0);
+          p.pos.set(0, 0, -0.5);
+        }
+        
+        
+        //RandomPoints b;
+        //b.n = 16;
+        Block b;
+        WriteInBlocks say;
+        say.block_pitch.set(1, 1, 1);
+        say.point_genesis = &b;
+        say.generate(c);
+         
+        c.pos.set(-0, 0, 0);
+
+        /*
         clouds.push_back(c);
-        clouds[1].pos.set(10, 0, 0);
-        clouds[1].scale.set(-1, 1, 1);
+        clouds[1].pos.set(0, 0, 0);
+        clouds[1].scale.set( 1, 1, 1);
+
+        clouds.resize(3);
+        clouds[2].pos.set(0, 0, 0);
+        clouds[2].scale.set(1,  1, 1);
+        say.generate(clouds[2]);
+        */
       }
 
       bank.add(quake);
+      bank.add(point_quake);
       bank.add(particle_scale);
+      //particle_scale.factor.set(.1, .1, .1);
 
       change_color.pal = &palette;
       bank.add(change_color);
-      bank.add(strobe_cloud);
+    }
+
+    void load() {
+      dot.load("images/dot_white_200.png");
+      //dot.load("images/metal091.jpg");
     }
 
     void step() {
@@ -1262,14 +1622,15 @@ class Animation {
 
       palette_selected = -1;
 
-      clouds[0].dir.y -= .3;
-      clouds[1].dir.y += .3;
+
+      as_quads.pitch = 4;
+      as_tets.pitch = 2;
     }
 
 
     void draw() {
       for (int i = 0; i < clouds.size(); i++) {
-        clouds[i].draw(as_tets, bank);
+        clouds[i].draw(as_quads, bank);
       }
       bank.end_of_frame();
     }
@@ -1313,8 +1674,8 @@ FILE *in_params = NULL;
 
 char *audio_path = NULL;
 
-int W = 1920;
-int H = 1080;
+int W = 1400;//1920;
+int H = 900;//1080;
 
 SDL_Surface *screen = NULL;
 
@@ -1422,7 +1783,7 @@ void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
           animation.dragon_fold.change = (axis_val*axis_val*axis_val) / 30;
           break;
         case 1:
-          animation.particle_scale.factor.y = 1.1 + axis_val;
+          animation.particle_scale.factor += axis_val / 20;
           break;
         case 3:
           animation.rotate_shift.change = .0001 + .01 * axis_val;
@@ -1453,9 +1814,26 @@ void on_joy_button(ControllerState &ctrl, int button, bool down) {
     case 0:
       if (down) {
         switch(button) {
-          case 2:
-            animation.quake.strength = 1.;
+          case 0:
+            animation.quake.strength = .3;
             break;
+          case 1:
+            animation.point_quake.strength = .1;
+            break;
+          case 2:
+            animation.bank.remove(animation.strobe_cloud);
+            animation.bank.add(animation.strobe_cloud);
+            break;
+          case 3:
+            animation.bank.remove(animation.strobe_cloud);
+            break;
+        }
+      }
+      break;
+
+    case 1:
+      if (down) {
+        switch(button) {
           case 0:
             animation.explode.clear();
             animation.bank.remove(animation.explode);
@@ -1472,17 +1850,19 @@ void on_joy_button(ControllerState &ctrl, int button, bool down) {
       break;
 
     case 3:
-      switch(button) {
-        case 0:
-          animation.angle_zero.change = 0;
-          animation.angle_zero = 0;
-          break;
-        case 2:
-          animation.dragon_fold.change = 0;
-          animation.dragon_fold = 0;
-          break;
+      if (down) {
+        switch(button) {
+          case 0:
+            animation.bank.remove(animation.revolve);
+            animation.bank.add(animation.revolve);
+            break;
+          case 1:
+            animation.bank.remove(animation.revolve);
+            break;
+        }
       }
       break;
+
 
     case 2:
       if (down)
@@ -1654,11 +2034,14 @@ int main(int argc, char *argv[])
 
   glMatrixMode( GL_PROJECTION );
   glLoadIdentity();
-  gluPerspective(70,(double)W/H,1,10000);
+  gluPerspective(70,(double)W/H,1,100);
 
   glEnable(GL_DEPTH_TEST);
-  glEnable (GL_BLEND);
-  glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+
+  animation.load();
 
   draw_scene();
 
@@ -1752,6 +2135,7 @@ int main(int argc, char *argv[])
                   running = false;
                   break;
 
+                  case 'f':
                   case 13:
                     SDL_WM_ToggleFullScreen(screen);
                     break;

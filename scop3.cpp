@@ -15,6 +15,7 @@ using namespace std;
 
 #include "ctrl_layers.h"
 #include "palettes.h"
+#include "textures.h"
 
 #define Pf(V) printf(#V "=%f\n", (float)V)
 
