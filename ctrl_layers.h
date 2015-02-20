@@ -28,6 +28,39 @@ void handle_joystick_events(SDL_Event &event) {
 
   switch (event.type) 
   {
+    case SDL_JOYHATMOTION:  /* Handle Hat Motion */
+      if (event.jhat.which < controllers.size())
+      {
+        ControllerState &ctrl = controllers[event.jaxis.which];
+
+        int l = ctrl.selected_layer;
+        switch(event.jhat.value)
+        {
+          case 1:
+            l = 0;
+            break;
+          case 2:
+            l = 1;
+            break;
+          case 4:
+            l = 2;
+            break;
+          case 8:
+            l = 3;
+            break;
+
+          default:
+            break;
+        }
+
+        if (l != ctrl.selected_layer) {
+          // layer changed
+          ctrl.selected_layer = l;
+          printf("LAYER %d\n", ctrl.selected_layer);
+        }
+      }
+      break;
+
     case SDL_JOYAXISMOTION:
       if (event.jaxis.which < controllers.size())
       {
@@ -88,10 +121,12 @@ void handle_joystick_events(SDL_Event &event) {
       }
       break;
 
+    #if 0
     case SDL_JOYHATMOTION:  /* Handle Hat Motion */
       printf("%2d: hat %d = %d\n",
              event.jhat.which, event.jhat.hat, event.jhat.value);
       break;
+    #endif
 
     case SDL_JOYBALLMOTION:  /* Handle Joyball Motion */
       printf("%2d: ball %d += %d, %d\n",
