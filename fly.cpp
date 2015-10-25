@@ -38,7 +38,7 @@ class World {
 
     Texture metal;
 
-    World() {
+    World() : revolve(1) {
 
       make_palettes();
       make_palette(&palette, PALETTE_LEN,
@@ -57,7 +57,7 @@ class World {
           rpa.n = 1000;
           rpa.pos_range = 500;
           rpa.scale_min = 1;
-          rpa.scale_max = 10;
+          rpa.scale_max = 100;
 
           rpa.generate(c);
         }
@@ -130,6 +130,8 @@ class World {
 
       change_color.pal = &palette;
       bank.add(change_color);
+
+      bank.add(revolve);
     }
 
     void load() {
@@ -531,6 +533,8 @@ int main(int argc, char *argv[])
   if (out_stream) {
     pixelbuf = (char*)malloc(W * H * 4); // 4 = RGBA
   }
+
+  camera.velocity = .05;
 
   while (running)
   {

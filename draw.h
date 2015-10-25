@@ -1263,6 +1263,11 @@ class StrobeCloud : public ColorFilter {
 
 class Revolve : public RotateFilter {
   public:
+    Revolve(double max_speed=10) {
+      this->max_speed = max_speed;
+    }
+
+    double max_speed;
     vector<Pt> state;
     vector<Pt> sum;
 
@@ -1276,7 +1281,7 @@ class Revolve : public RotateFilter {
           sum.resize(particle_i + 1);
           for (int i = have; i < state.size(); i++) {
             state[i].random();
-            state[i] *= 10;
+            state[i] *= max_speed * frandom();
             sum[i].set(0, 0, 0);
           }
         }
