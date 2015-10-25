@@ -46,17 +46,18 @@ class World {
 
       as_texture_planes.texture = &metal;
 
-      clouds.resize(1);
+      clouds.resize(2);
       {
         Cloud &c = clouds[0];
 
         if (1) {
           RandomPoints rpo;
-          RandomParticles rpa(&rpo);
-          rpa.n = 500;
-          rpa.pos_range = 200;
-          rpa.scale_min = 2;
-          rpa.scale_max = 10;
+          Block blockpoints;
+          RandomParticles rpa(&blockpoints);
+          rpa.n = 1000;
+          rpa.pos_range = 500;
+          rpa.scale_min = 1;
+          rpa.scale_max = 100;
 
           rpa.generate(c);
         }
@@ -105,18 +106,21 @@ class World {
         //RandomPoints b;
         //b.n = 16;
         Block b;
-        WriteInBlocks say;
+        WriteInBlocks say("front");
         say.block_pitch.set(1, 1, 1);
         say.point_genesis = &b;
         say.generate(c);
          
-        c.pos.set(0, 0, -60);
+        c.pos.set(0, 0, -40);
+
+        Cloud &c2 = clouds[1];
+        c2.pos.set(0, 0, -45);
+        WriteInBlocks say2("back");
+        say2.block_pitch.set(1, 1, 1);
+        say2.point_genesis = &b;
+        say2.generate(c2);
 
         /*
-        clouds.push_back(c);
-        clouds[1].pos.set(0, 0, 0);
-        clouds[1].scale.set( 1, 1, 1);
-
         clouds.resize(3);
         clouds[2].pos.set(0, 0, 0);
         clouds[2].scale.set(1,  1, 1);
@@ -476,7 +480,7 @@ int main(int argc, char *argv[])
 
   glMatrixMode( GL_PROJECTION );
   glLoadIdentity();
-  gluPerspective(100,(double)W/H,.1,200);
+  gluPerspective(80,(double)W/H,.5,300);
 
   glEnable(GL_DEPTH_TEST);
   glEnable(GL_BLEND);
