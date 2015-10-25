@@ -57,7 +57,7 @@ class World {
           rpa.n = 1000;
           rpa.pos_range = 500;
           rpa.scale_min = 1;
-          rpa.scale_max = 100;
+          rpa.scale_max = 10;
 
           rpa.generate(c);
         }
@@ -480,7 +480,7 @@ int main(int argc, char *argv[])
 
   glMatrixMode( GL_PROJECTION );
   glLoadIdentity();
-  gluPerspective(80,(double)W/H,.5,300);
+  gluPerspective(80,(double)W/H,.5,500);
 
   glEnable(GL_DEPTH_TEST);
   glEnable(GL_BLEND);

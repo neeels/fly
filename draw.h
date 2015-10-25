@@ -951,7 +951,7 @@ class RandomParticles : public ParticleGenesis {
         p.pos *= pos_range;
 
         p.scale.random();
-        p.scale /= scale_max - scale_min;
+        p.scale *= scale_max - scale_min;
         p.scale += scale_min;
 
         p.dir.random();
