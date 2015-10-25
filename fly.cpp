@@ -16,11 +16,6 @@ float want_fps = 25;
 class World {
   public:
     palette_t palette;
-    palette_t blended_palette;
-    palette_t *is_palette;
-    palette_t *want_palette;
-    double palette_blend;
-    bool stop_palette_transition;
 
     vector<Cloud> clouds;
 
@@ -44,14 +39,9 @@ class World {
     Texture metal;
 
     World() {
-      is_palette = &palettes[0];
-      want_palette = is_palette;
 
       make_palettes();
       make_palette(&palette, PALETTE_LEN,
-                   palette_defs[0]);
-
-      make_palette(&blended_palette, PALETTE_LEN,
                    palette_defs[0]);
 
       as_texture_planes.texture = &metal;
@@ -60,12 +50,13 @@ class World {
       {
         Cloud &c = clouds[0];
 
-        if (0) {
+        if (1) {
           RandomPoints rpo;
           RandomParticles rpa(&rpo);
-          rpa.n = 100;
-          rpa.scale_min = 10;
-          rpa.scale_max = 20;
+          rpa.n = 500;
+          rpa.pos_range = 200;
+          rpa.scale_min = 2;
+          rpa.scale_max = 10;
 
           rpa.generate(c);
         }
@@ -119,7 +110,7 @@ class World {
         say.point_genesis = &b;
         say.generate(c);
          
-        c.pos.set(0, 0, -20);
+        c.pos.set(0, 0, -60);
 
         /*
         clouds.push_back(c);
@@ -133,6 +124,8 @@ class World {
         */
       }
 
+      change_color.pal = &palette;
+      bank.add(change_color);
     }
 
     void load() {
@@ -158,38 +151,81 @@ class World {
 };
 
 struct Fly {
-	Param x, y, z;
-	Param rot_x, rot_z;
+  Pt pos;
+  Pt nose;
+  Pt top;
+  Pt right;
+
+  Param top_angle;
+  Param roll_x;
+  Param roll_y;
+  Param roll_z;
   Param velocity;
-	Param vision;
+  Param vision;
 
 	Fly() {
-    x = 0;
-    y = 0;
-    z = 0;
-    rot_x.slew = .94;
-    rot_z.slew = .94;
-    vision.slew = .96;
+    nose.set(0, 0, -1);
+    right.set(1, 0, 0);
+    top.set(0, 1, 0);
+    update_normals();
+    roll_x.slew = .94;
+    roll_y.slew = .94;
+    roll_z.slew = .94;
+    vision = 1;
 	}
 
+  void update_normals() {
+      nose.abs();
+
+      //top.set(nose.y, nose.z, nose.x);
+      //top.rot_about(nose, top_angle);
+      top.abs();
+
+      //right.set(nose.z, nose.x, nose.y);
+      //right.rot_about(nose, top_angle);
+      right.abs();
+
+      printf("%f %f\n",
+             (float)(nose.x * top.x + nose.y * top.y + nose.z * top.z),
+             (float)(nose.x * right.x + nose.y * right.y + nose.z * right.z));
+  }
+
+
   void step(void) {
-      x.step();
-      y.step();
-      z.step();
-      rot_x.step();
-      rot_z.step();
+      roll_x.step();
+      roll_y.step();
+      roll_z.step();
+      top_angle.step();
       velocity.step();
       vision.step();
 
+      nose.rot_about(top, roll_y);
+      right.rot_about(top, roll_y);
+
+      nose.rot_about(right, roll_x);
+      top.rot_about(right, roll_x);
+
+      top.rot_about(nose, roll_z);
+      right.rot_about(nose, roll_z);
+
+      update_normals();
+
       //printf("%f\n", (float)velocity);
       if (fabs(velocity) > 1.e-5) {
-        Pt dir;
-        dir.ang2cart(velocity, rot_z + M_PI/2, rot_x);
-        printf("%f  rx %f rz %f  ", (float)velocity, (float)rot_x, (float)rot_z); dir.print();
-        x += dir.x;
-        y += dir.y;
-        z += dir.z;
+        Pt dir = nose;
+        dir *= velocity;
+        pos += dir;
       }
+  }
+
+  void lookAt() {
+    Pt n = nose;
+    n *= vision;
+    printf("%f\n", (float)vision);
+    n += pos;
+    gluLookAt(pos.x, pos.y, pos.z,
+              n.x, n.y, n.z,
+              top.x, top.y, top.z);
   }
 };
 
@@ -205,21 +241,7 @@ void draw_scene()
   glMatrixMode( GL_MODELVIEW );
   glLoadIdentity( );
 
-  double vision = camera.vision;
-  gluLookAt(0, 0, 0,
-            0, 0, -2,
-            0, 1, 0);
-
-  double x = camera.x;
-  double y = camera.y;
-  double z = camera.z;
-  double angleZ = (180./M_PI) * camera.rot_z;
-  double angleX = (180./M_PI) * camera.rot_x;
-
-  glRotated(angleZ,0,1,0);
-  glRotated(angleX,1,0,0);
-  glTranslated(x, y, z);
-
+  camera.lookAt();
   world.draw();
 
   glFlush();
@@ -262,25 +284,31 @@ void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
   switch(axis)
   {
   case 1:
-    camera.rot_x.change = (axis_val*axis_val*axis_val) / 10;
     break;
   case 0:
-    camera.rot_z.change = (axis_val*axis_val*axis_val) / 10;
-    break;
-  case 3:
-    //camera.x.change = - axis_val;
+    camera.roll_z = (axis_val*axis_val*axis_val) / 10;
     break;
   case 4:
-    camera.velocity = -axis_val / 10;
+    camera.roll_x = (axis_val*axis_val*axis_val) / 10;
+    break;
+  case 3:
+    camera.roll_y = -(axis_val*axis_val*axis_val) / 10;
     break;
   case 5:
-    camera.vision = (1. + axis_val)/2;
+    // analog trigger ... -1 == not pressed, 0 = half, 1 = full
+    // accel
+    camera.velocity.change = ((axis_val + 1) / 2) / 200;
     break;
   case 2:
+    // analog trigger ... -1 == not pressed, 0 = half, 1 = full
+    // break
+    camera.velocity.change = -((axis_val + 1) / 2) / 200;
+    break;
     break;
   default:
     break;
   }
+  printf("%d %f\n", axis, (float)axis_val);
 }
 
 void on_joy_button(ControllerState &ctrl, int button, bool down) {
@@ -448,7 +476,7 @@ int main(int argc, char *argv[])
 
   glMatrixMode( GL_PROJECTION );
   glLoadIdentity();
-  gluPerspective(70,(double)W/H,1,100);
+  gluPerspective(100,(double)W/H,.1,200);
 
   glEnable(GL_DEPTH_TEST);
   glEnable(GL_BLEND);

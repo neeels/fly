@@ -77,6 +77,34 @@ class Pt {
       }
     }
 
+    double len() const {
+      return sqrt(x*x + y*y + z*z);
+    }
+
+    void abs() {
+      double l = len();
+      x = x / l;
+      y = y / l;
+      z = z / l;
+    }
+
+    void rot_about(const Pt &axis, double rad) {
+      double xx, yy, zz;
+      double l = axis.len();
+      double u = axis.x / l;
+      double v = axis.y / l;
+      double w = axis.z / l;
+      double cos_rad = cos(rad);
+      double sin_rad = sin(rad);
+      double f1 = (u*x + v*y + w*z)*(-cos_rad + 1);
+      xx = u*f1 + x*cos_rad + (- w*y + v*z)*sin_rad;
+      yy = v*f1 + y*cos_rad + (  w*x - u*z)*sin_rad;
+      zz = w*f1 + z*cos_rad + (- v*x + u*y)*sin_rad;
+      x = xx;
+      y = yy;
+      z = zz;
+    }
+
     void scale3(Pt &p) {
       x *= p.x;
       y *= p.y;
