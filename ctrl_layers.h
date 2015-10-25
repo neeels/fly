@@ -1,3 +1,6 @@
+#include <SDL/SDL.h>
+#include <vector>
+using namespace std;
 
 class ControllerState {
   public:
