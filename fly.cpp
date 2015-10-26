@@ -10,8 +10,172 @@ void draw_scene();
 bool running = true;
 volatile int frames_rendered = 0;
 volatile int avg_frame_period = 0;
+volatile double dt;
 #define AVG_SHIFTING 3
 float want_fps = 25;
+
+const double maneuver_engines_strength = 0.5;
+const double forward_engines_strength = 2;
+
+class Fly : public Particle {
+  public:
+  Pt nose;
+  Pt top;
+  Pt right;
+
+  Param top_angle;
+  Param roll_x;
+  Param roll_y;
+  Param roll_z;
+
+  Mass mass;
+  Param propulsion_forward;
+  Param propulsion_break;
+
+  Param wings;
+
+	Fly() : Particle() {
+    xx = true;
+    nose.set(0, 0, -1);
+    top.set(0, 1, 0);
+    right.set(1, 0, 0);
+    update_normals();
+    roll_x.slew = .94;
+    roll_y.slew = .94;
+    roll_z.slew = .94;
+    wings.limit(0, 1);
+    wings = .1;
+
+    Block b;
+    b.generate(*this);
+
+    int l = points.size();
+    for (int i = 0; i < l; i++) {
+      Point &p = points[i];
+      if (p.z < 0) {
+        p.x *= .1;
+      }
+      p.y = max(min(p.y, .1), -.1);
+    }
+	}
+
+  void update_normals() {
+      nose = nose.unit();
+
+      //top.set(nose.y, nose.z, nose.x);
+      //top.rot_about(nose, top_angle);
+      top = top.unit();
+
+      //right.set(nose.z, nose.x, nose.y);
+      //right.rot_about(nose, top_angle);
+      right = right.unit();
+
+      double is_ortho_top = nose.x * top.x + nose.y * top.y + nose.z * top.z;
+      double is_ortho_right = nose.x * right.x + nose.y * right.y + nose.z * right.z;
+      if ((fabs(is_ortho_top) > 1.e-6)
+          || (fabs(is_ortho_right) > 1.e-6)) {
+        printf("ORTHO! %g %g\n", is_ortho_top, is_ortho_right);
+      }
+
+      Pt r3 = nose.cart2ang_xy();
+      rot3.x = r3.x * 180./M_PI;
+      rot3.y = r3.y * 180./M_PI;
+      rot3.z = 0;
+  }
+
+
+  void step(void) {
+      roll_x.step();
+      roll_y.step();
+      roll_z.step();
+      top_angle.step();
+      propulsion_forward.step();
+      propulsion_break.step();
+      wings.step();
+
+      nose.rot_about(top, roll_y);
+      right.rot_about(top, roll_y);
+
+      nose.rot_about(right, roll_x);
+      top.rot_about(right, roll_x);
+
+      top.rot_about(nose, roll_z);
+      right.rot_about(nose, roll_z);
+
+      update_normals();
+
+      Pt wings_force;
+
+      if (dt < 1.e-5)
+        return;
+
+      if (wings > 1.e-5) {
+        Pt v_want = nose * mass.v.len();
+        wings_force = (v_want - mass.v) * wings / dt;
+      }
+
+      Pt break_want = mass.v * (-propulsion_break / dt);
+
+      /* main engines component of break force */
+      double forward_drive_break_amount = break_want.project(nose);
+      forward_drive_break_amount = min(forward_drive_break_amount, forward_engines_strength);
+      forward_drive_break_amount = max(forward_drive_break_amount, 0.);
+
+      /* remove main engines part from break force */
+      break_want += nose * forward_drive_break_amount;
+
+      /* remaining components with weaker engines */
+      double break_drive = break_want.len();
+      if (break_drive > maneuver_engines_strength) {
+        break_want *= maneuver_engines_strength / break_drive;
+        break_drive = maneuver_engines_strength;
+      }
+      Pt maneuver_engines = break_want;
+
+      double forward_drive_amount = max(forward_drive_break_amount, (double)propulsion_forward);
+      Pt main_engine_force = nose * forward_drive_amount;
+
+      Pt propulsion = main_engine_force + maneuver_engines;
+      mass.accelerate(wings_force + propulsion, dt);
+
+      pos += mass.v * dt;
+
+      printf("v=%5.2f p=%5.2f g=%5.2f break_fwd=%5.2f break_maneuver=%5.2f\n",
+             mass.v.len(),
+             propulsion.len(),
+             wings_force.len(),
+             forward_drive_break_amount,
+             maneuver_engines.len());
+  }
+
+
+  void draw(DrawBank &bank)
+  {
+    printf("nose ");nose.print();
+    static AsQuads as_quads;
+    Particle::draw(as_quads, bank);
+  }
+};
+
+
+struct Camera {
+  Pt at;
+  Pt from;
+  Pt top;
+
+  void look_at(const Pt &look_at, const Pt &from_rel, const Pt &top) {
+    at = look_at;
+    from = at + from_rel;
+    this->top = top;
+  }
+
+  void gluLookAt() {
+    ::gluLookAt(from.x, from.y, from.z,
+                at.x, at.y, at.z,
+                top.x, top.y, top.z);
+  }
+};
+
 
 class World {
   public:
@@ -27,16 +191,21 @@ class World {
     AsTexturePlanes as_texture_planes;
     AsPoints as_points;
 
-    DrawBank bank;
+    DrawBank cloud_bank;
+    DrawBank fixed_bank;
     Quake quake;
     PointQuake point_quake;
     Explode explode;
     Scale particle_scale;
     ChangeColor change_color;
+    ChangeColor change_color2;
     StrobeCloud strobe_cloud;
     Revolve revolve;
 
     Texture metal;
+
+    Fly fly;
+    Camera cam;
 
     World() : revolve(1) {
 
@@ -57,7 +226,7 @@ class World {
           rpa.n = 1000;
           rpa.pos_range = 500;
           rpa.scale_min = 1;
-          rpa.scale_max = 100;
+          rpa.scale_max = 30;
 
           rpa.generate(c);
         }
@@ -129,9 +298,11 @@ class World {
       }
 
       change_color.pal = &palette;
-      bank.add(change_color);
+      cloud_bank.add(change_color);
+      cloud_bank.add(revolve);
 
-      bank.add(revolve);
+      change_color2.pal = &palette;
+      fixed_bank.add(change_color2);
     }
 
     void load() {
@@ -139,105 +310,29 @@ class World {
     }
 
     void step() {
+
+      fly.step();
+      cam.look_at(fly.pos + fly.top,
+                  fly.mass.v.unit() * (-3),
+                  fly.top);
+
       for (int i = 0; i < clouds.size(); i++) {
         clouds[i].step();
       }
-
-      as_quads.pitch = 4;
-      as_tets.pitch = 2;
     }
 
 
     void draw() {
       for (int i = 0; i < clouds.size(); i++) {
-        clouds[i].draw(as_quads, bank);
+        clouds[i].draw(as_quads, cloud_bank);
       }
-      bank.end_of_frame();
+      fly.draw(fixed_bank);
+      fixed_bank.end_of_frame();
+      cloud_bank.end_of_frame();
     }
 };
 
-struct Fly {
-  Pt pos;
-  Pt nose;
-  Pt top;
-  Pt right;
-
-  Param top_angle;
-  Param roll_x;
-  Param roll_y;
-  Param roll_z;
-  Param velocity;
-  Param vision;
-
-	Fly() {
-    nose.set(0, 0, -1);
-    right.set(1, 0, 0);
-    top.set(0, 1, 0);
-    update_normals();
-    roll_x.slew = .94;
-    roll_y.slew = .94;
-    roll_z.slew = .94;
-    vision = 1;
-	}
-
-  void update_normals() {
-      nose.abs();
-
-      //top.set(nose.y, nose.z, nose.x);
-      //top.rot_about(nose, top_angle);
-      top.abs();
-
-      //right.set(nose.z, nose.x, nose.y);
-      //right.rot_about(nose, top_angle);
-      right.abs();
-
-      printf("%f %f\n",
-             (float)(nose.x * top.x + nose.y * top.y + nose.z * top.z),
-             (float)(nose.x * right.x + nose.y * right.y + nose.z * right.z));
-  }
-
-
-  void step(void) {
-      roll_x.step();
-      roll_y.step();
-      roll_z.step();
-      top_angle.step();
-      velocity.step();
-      vision.step();
-
-      nose.rot_about(top, roll_y);
-      right.rot_about(top, roll_y);
-
-      nose.rot_about(right, roll_x);
-      top.rot_about(right, roll_x);
-
-      top.rot_about(nose, roll_z);
-      right.rot_about(nose, roll_z);
-
-      update_normals();
-
-      //printf("%f\n", (float)velocity);
-      if (fabs(velocity) > 1.e-5) {
-        Pt dir = nose;
-        dir *= velocity;
-        pos += dir;
-      }
-  }
-
-  void lookAt() {
-    Pt n = nose;
-    n *= vision;
-    printf("%f\n", (float)vision);
-    n += pos;
-    gluLookAt(pos.x, pos.y, pos.z,
-              n.x, n.y, n.z,
-              top.x, top.y, top.z);
-  }
-};
-
-
 World world;
-Fly camera;
 
 
 void draw_scene()
@@ -247,7 +342,7 @@ void draw_scene()
   glMatrixMode( GL_MODELVIEW );
   glLoadIdentity( );
 
-  camera.lookAt();
+  world.cam.gluLookAt();
   world.draw();
 
   glFlush();
@@ -290,34 +385,58 @@ void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
   switch(axis)
   {
   case 1:
+  default:
+    printf("%d %f\n", axis, (float)axis_val);
     break;
   case 0:
-    camera.roll_z = (axis_val*axis_val*axis_val) / 10;
+    world.fly.roll_z = (axis_val*axis_val*axis_val) / 10;
     break;
   case 4:
-    camera.roll_x = (axis_val*axis_val*axis_val) / 10;
+    world.fly.roll_x = (axis_val*axis_val*axis_val) / 10;
     break;
   case 3:
-    camera.roll_y = -(axis_val*axis_val*axis_val) / 10;
+    world.fly.roll_y = -(axis_val*axis_val*axis_val) / 10;
     break;
   case 5:
     // analog trigger ... -1 == not pressed, 0 = half, 1 = full
     // accel
-    camera.velocity.change = ((axis_val + 1) / 2) / 200;
+#if 0
+    world.fly.velocity.change = ((axis_val + 1) / 2) / 200;
+#else
+    world.fly.propulsion_forward = (axis_val + 1) / 2;
+#endif
     break;
   case 2:
     // analog trigger ... -1 == not pressed, 0 = half, 1 = full
     // break
-    camera.velocity.change = -((axis_val + 1) / 2) / 200;
-    break;
-    break;
-  default:
+#if 0
+    world.fly.velocity.change = -((axis_val + 1) / 2) / 200;
+#else
+    world.fly.propulsion_break = (axis_val + 1) / 2;
+#endif
     break;
   }
-  printf("%d %f\n", axis, (float)axis_val);
 }
 
 void on_joy_button(ControllerState &ctrl, int button, bool down) {
+  if (! down)
+    return;
+
+  switch (button) {
+  case 0:
+    if (world.fly.wings < 1.e-5)
+      world.fly.wings = .1;
+    else
+    if (world.fly.wings < .9)
+      world.fly.wings = 1;
+    else
+      world.fly.wings = 0;
+    break;
+
+  default:
+    printf("button %d\n", button);
+    break;
+  }
 }
 
 
@@ -534,14 +653,14 @@ int main(int argc, char *argv[])
     pixelbuf = (char*)malloc(W * H * 4); // 4 = RGBA
   }
 
-  camera.velocity = .05;
+  world.fly.mass.v.set(0, 0, -.05);
 
   while (running)
   {
 
 
     world.step();
-    camera.step();
+
     draw_scene();
     frames_rendered ++;
 
@@ -550,10 +669,13 @@ int main(int argc, char *argv[])
 
       int t = SDL_GetTicks();
       int elapsed = t - last_ticks2;
+
       last_ticks2 = t;
 
       avg_frame_period -= avg_frame_period >>AVG_SHIFTING;
       avg_frame_period += elapsed;
+
+      dt = 1.e-3 * elapsed;
     }
 
     if (out_stream) {

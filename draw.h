@@ -46,46 +46,77 @@ class Pt {
       z = -1. + 2.*frandom();
     }
 
-    void ang2cart(double r, double ang1, double ang2) {
-      set(r * cos(ang1) * cos(ang2),
-          r * cos(ang1) * sin(ang2),
-          r * sin(ang1));
+    void ang2cart_xy(double ax, double ay, double r) {
+      set(r * cos(ax) * sin(ay),
+          r * sin(ax),
+          r * cos(ax) * sin(ay)
+          );
     }
 
-    void ang2cart() {
-      ang2cart(x, y, z);
+    Pt ang2cart_xy() const {
+      Pt p;
+      p.ang2cart_xy(x, y, z);
+      return p;
     }
 
-    void cart2ang() {
+    Pt cart2ang_xy() const {
       // dunno
-      double r = sqrt(x*x + y*y + z*z);
+      double r = len();
       if (fabs(r) < 1e-5) {
-        x = y = z = 0;
+        return Pt();
+      }
+
+      double ax = asin(y / r);
+      /*if (z > 0)
+        ax = M_PI - ax;
+*/
+#define Pf(V) printf(#V "=%f\n", (float)V)
+      Pf(y);
+      Pf(ax);
+      double ay = -asin(x / (r*cos(ax)));
+      if (z > 0)
+        ay += M_PI;
+      return Pt(ax, ay, r);
+    }
+
+
+    void ang2cart_yz(double r, double ay, double az) {
+      set(r * cos(ay) * cos(az),
+          r * cos(ay) * sin(az),
+          r * sin(ay));
+    }
+
+    Pt ang2cart_yz() const {
+      Pt p;
+      p.ang2cart_yz(x, y, z);
+      return p;
+    }
+
+    Pt cart2ang_yz() const {
+      // dunno
+      double r = len();
+      if (fabs(r) < 1e-5) {
+        return Pt();
+      }
+
+      double ay = acos(z / r);
+      double az;
+      if (fabs(x) < 1e-5) {
+        az = 0;
       }
       else {
-        double ay = acos(z / r);
-        double az;
-        if (fabs(x) < 1e-5) {
-          az = 0;
-        }
-        else {
-          az = atan(y / x);
-        }
-        x = r;
-        y = ay;
-        z = az;
+        az = atan(y / x);
       }
+
+      return Pt(r, ay, az);
     }
 
     double len() const {
       return sqrt(x*x + y*y + z*z);
     }
 
-    void abs() {
-      double l = len();
-      x = x / l;
-      y = y / l;
-      z = z / l;
+    Pt unit() const {
+      return Pt(*this) / len();
     }
 
     void rot_about(const Pt &axis, double rad) {
@@ -121,6 +152,19 @@ class Pt {
       x = max(x, p.x);
       y = max(y, p.y);
       z = max(z, p.z);
+    }
+
+    double dot(const Pt &p) const
+    {
+      return
+        x * p.x + y * p.y + z * p.z;
+    }
+
+    double project(const Pt &p) const
+    {
+      double d = dot(p);
+      double sign = (d >= 0? 1. : -1.);
+      return sign * sqrt(fabs(dot(p)));
     }
 
     Pt& operator+=(const Pt &p) {
@@ -165,6 +209,30 @@ class Pt {
       return *this;
     }
 
+    Pt operator+(const Pt &p) const {
+      Pt x(*this);
+      x += p;
+      return x;
+    }
+
+    Pt operator-(const Pt &p) const {
+      Pt x(*this);
+      x -= p;
+      return x;
+    }
+
+    Pt operator*(const double f) const {
+      Pt x(*this);
+      x *= f;
+      return x;
+    }
+
+    Pt operator/(const double f) const {
+      Pt x(*this);
+      x /= f;
+      return x;
+    }
+
 
     void glVertex3d() {
       ::glVertex3d(x, y, z);
@@ -175,14 +243,14 @@ class Pt {
     }
 
     void glRotated() {
+      if (z) {
+        ::glRotated(z,0,0,1);
+      }
       if (x) {
         ::glRotated(x,1,0,0);
       }
       if (y) {
-        ::glRotated(y,0,1,0);
-      }
-      if (z) {
-        ::glRotated(z,0,0,1);
+        ::glRotated(y, 0, 1, 0); //cos(x)*M_PI/180, sin(x*M_PI/180));
       }
     }
 
@@ -191,7 +259,7 @@ class Pt {
     }
 
     void print() {
-      printf("x%f y%f z%f\n", x, y, z);
+      printf("x%5.2f y%5.2f z%5.2f\n", x, y, z);
     }
 
 };
@@ -716,7 +784,7 @@ class AsQuads : public DrawAs {
     int pitch;
 
     AsQuads(){
-      pitch = 2;
+      pitch = 4;
     }
 
     virtual void draw(vector<Point> &points, DrawBank &d)
@@ -777,20 +845,25 @@ class AsTexturePlanes : public DrawAs {
 class Placed {
   public:
     Pt pos;
-    Pt dir;
+    Pt rot3;
     Pt scale;
     level_e level;
+    bool xx;
 
     Placed() {
+      xx=false;
       pos.set(0, 0, 0);
-      dir.set(0, 0, 0);
+      rot3.set(0, 0, 0);
       scale.set(1, 1, 1);
       level = level_unknown;
     }
 
     void placement(DrawBank &d) {
       d.translate(pos, level);
-      d.rotate(dir, level);
+      if (xx) {
+        printf("rot3 ");rot3.print();
+      }
+      d.rotate(rot3, level);
       d.scale(scale, level);
     }
 
@@ -954,8 +1027,8 @@ class RandomParticles : public ParticleGenesis {
         p.scale *= scale_max - scale_min;
         p.scale += scale_min;
 
-        p.dir.random();
-        p.dir.scale3(dir_range);
+        p.rot3.random();
+        p.rot3.scale3(dir_range);
 
         if (point_genesis) {
           point_genesis->generate(p);
@@ -1016,7 +1089,6 @@ class WriteInBlocks : public ParticleGenesis {
         block_pos -= letter_mid;
 
         const uint8_t *bits = font[ text[i] & 0x7f ];
-        printf("%c\n", text[i]);
 
 
         Pt y0_pos = block_pos;
@@ -1030,7 +1102,6 @@ class WriteInBlocks : public ParticleGenesis {
 
               p.pos = block_pos;
               p.scale = block_size;
-              p.pos.print();
             }
             b >>= 1;
             block_pos.y -= block_pitch.y;
@@ -1293,19 +1364,6 @@ class Revolve : public RotateFilter {
 };
 
 
-class Motion {
-  public:
-    bool done;
-
-    Motion() {
-      done = false;
-    }
-
-    void step();
-};
-
-
-
 class Param {
   public:
     double val;
@@ -1393,4 +1451,20 @@ class Param {
   private:
     double known_want_val;
 };
+
+class Mass {
+  public:
+    double m;
+    Pt v;
+
+    Mass() 
+      :m(1), v(0, 0, 0)
+    {}
+
+    void accelerate(const Pt &F, double dt)
+    {
+      v += F * (dt / m);
+    }
+};
+
 
