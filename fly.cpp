@@ -21,6 +21,7 @@ class Fly : public Particle {
   public:
   Pt nose;
   Pt top;
+  Pt top_lag;
   Pt right;
 
   Param top_angle;
@@ -34,10 +35,13 @@ class Fly : public Particle {
 
   Param wings;
 
+  bool do_cruise;
+  Param cruise_v;
+
 	Fly() : Particle() {
-    xx = true;
     nose.set(0, 0, -1);
     top.set(0, 1, 0);
+    top_lag = top;
     right.set(1, 0, 0);
     update_normals();
     roll_x.slew = .94;
@@ -45,6 +49,9 @@ class Fly : public Particle {
     roll_z.slew = .94;
     wings.limit(0, 1);
     wings = .1;
+
+    do_cruise = true;
+    cruise_v = .05;
 
     Block b;
     b.generate(*this);
@@ -77,10 +84,7 @@ class Fly : public Particle {
         printf("ORTHO! %g %g\n", is_ortho_top, is_ortho_right);
       }
 
-      Pt r3 = nose.cart2ang_xy();
-      rot3.x = r3.x * 180./M_PI;
-      rot3.y = r3.y * 180./M_PI;
-      rot3.z = 0;
+      rot3 = nose.cart2ang(top) * (180./M_PI);
   }
 
 
@@ -92,6 +96,7 @@ class Fly : public Particle {
       propulsion_forward.step();
       propulsion_break.step();
       wings.step();
+      cruise_v.step();
 
       nose.rot_about(top, roll_y);
       right.rot_about(top, roll_y);
@@ -103,6 +108,10 @@ class Fly : public Particle {
       right.rot_about(nose, roll_z);
 
       update_normals();
+
+      const int div = 10;
+      top_lag = (top_lag * (div-1) + top) / div;
+
 
       Pt wings_force;
 
@@ -132,26 +141,46 @@ class Fly : public Particle {
       }
       Pt maneuver_engines = break_want;
 
-      double forward_drive_amount = max(forward_drive_break_amount, (double)propulsion_forward);
-      Pt main_engine_force = nose * forward_drive_amount;
+      double want_propulsion_forward = propulsion_forward;
+      if (do_cruise) {
+        if ((want_propulsion_forward > 1e-6) || (propulsion_break > 1e-6)) {
+          /* user is changing speed. Take current speed as new desired speed. */
+          cruise_v = mass.v.len();
+        }
+        else {
+          double diff = cruise_v - mass.v.len();
+          if (diff > 1e-6) {
+            /* we're slowing down below cruising speed. Hit the accelerator a bit. */
+            want_propulsion_forward = (diff / forward_engines_strength) / dt;
+            if (want_propulsion_forward < propulsion_forward)
+              want_propulsion_forward = propulsion_forward;
+          }
+        }
+      }
+
+      double forward_drive_amount = max(forward_drive_break_amount, want_propulsion_forward);
+      Pt main_engine_force = nose * (forward_drive_amount * forward_engines_strength);
 
       Pt propulsion = main_engine_force + maneuver_engines;
       mass.accelerate(wings_force + propulsion, dt);
 
       pos += mass.v * dt;
 
-      printf("v=%5.2f p=%5.2f g=%5.2f break_fwd=%5.2f break_maneuver=%5.2f\n",
-             mass.v.len(),
-             propulsion.len(),
-             wings_force.len(),
-             forward_drive_break_amount,
-             maneuver_engines.len());
+      static int skip = 0;
+      if ((skip ++) > 10) {
+        skip = 0;
+        printf("v=%5.2f p=%5.2f g=%5.2f break_fwd=%5.2f break_maneuver=%5.2f\n",
+               mass.v.len(),
+               propulsion.len(),
+               wings_force.len(),
+               forward_drive_break_amount,
+               maneuver_engines.len());
+      }
   }
 
 
   void draw(DrawBank &bank)
   {
-    printf("nose ");nose.print();
     static AsQuads as_quads;
     Particle::draw(as_quads, bank);
   }
@@ -312,9 +341,15 @@ class World {
     void step() {
 
       fly.step();
-      cam.look_at(fly.pos + fly.top,
-                  fly.mass.v.unit() * (-3),
-                  fly.top);
+      Pt dir = fly.mass.v.unit();
+      if (! dir.zero())
+        dir = (dir + fly.nose.unit()) / 2;
+      else
+        dir = fly.nose;
+
+      cam.look_at(fly.pos + fly.top_lag,
+                  dir.unit() * (-3),
+                  fly.top_lag);
 
       for (int i = 0; i < clouds.size(); i++) {
         clouds[i].step();
@@ -389,13 +424,13 @@ void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
     printf("%d %f\n", axis, (float)axis_val);
     break;
   case 0:
-    world.fly.roll_z = (axis_val*axis_val*axis_val) / 10;
+    world.fly.roll_y = -(axis_val*axis_val*axis_val) / 10;
     break;
   case 4:
     world.fly.roll_x = (axis_val*axis_val*axis_val) / 10;
     break;
   case 3:
-    world.fly.roll_y = -(axis_val*axis_val*axis_val) / 10;
+    world.fly.roll_z = (axis_val*axis_val*axis_val) / 10;
     break;
   case 5:
     // analog trigger ... -1 == not pressed, 0 = half, 1 = full
@@ -424,13 +459,19 @@ void on_joy_button(ControllerState &ctrl, int button, bool down) {
 
   switch (button) {
   case 0:
-    if (world.fly.wings < 1.e-5)
+    if (world.fly.wings < 1.e-5) {
       world.fly.wings = .1;
+      world.fly.do_cruise = true;
+    }
     else
-    if (world.fly.wings < .9)
+    if (world.fly.wings < .9) {
       world.fly.wings = 1;
-    else
+      world.fly.do_cruise = true;
+    }
+    else {
       world.fly.wings = 0;
+      world.fly.do_cruise = false;
+    }
     break;
 
   default:
@@ -652,8 +693,6 @@ int main(int argc, char *argv[])
   if (out_stream) {
     pixelbuf = (char*)malloc(W * H * 4); // 4 = RGBA
   }
-
-  world.fly.mass.v.set(0, 0, -.05);
 
   while (running)
   {

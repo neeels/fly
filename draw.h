@@ -46,6 +46,10 @@ class Pt {
       z = -1. + 2.*frandom();
     }
 
+    bool zero() const {
+      return (!x) && (!y) && (!z);
+    }
+
     void ang2cart_xy(double ax, double ay, double r) {
       set(r * cos(ax) * sin(ay),
           r * sin(ax),
@@ -59,24 +63,134 @@ class Pt {
       return p;
     }
 
-    Pt cart2ang_xy() const {
-      // dunno
-      double r = len();
-      if (fabs(r) < 1e-5) {
+    Pt cart2ang(const Pt &top) const {
+      double l = len();
+      if (fabs(l) < 1.e-6) {
         return Pt();
       }
 
-      double ax = asin(y / r);
-      /*if (z > 0)
-        ax = M_PI - ax;
-*/
-#define Pf(V) printf(#V "=%f\n", (float)V)
-      Pf(y);
-      Pf(ax);
-      double ay = -asin(x / (r*cos(ax)));
-      if (z > 0)
-        ay += M_PI;
-      return Pt(ax, ay, r);
+      /* "first roll left/right about the nose axis by angle az (around z axis),
+          then turn the nose up/down by angle ax (around the x axis),
+          then turn left/right by angle ay (around the vertical y axis)."
+
+          ^ y
+          |
+          | az
+       ax +------> x
+         / ay
+        v
+        z
+
+        This vector is the result of those rotations, the top vector points
+        "upwards", and we're trying to find out ax, ay, and az.
+       */
+
+      Pt u = unit();
+
+      /* ax is the angle between the y=0 plane and this vector.
+                                                
+                    .                             
+                   /|                                
+                 /  |                               
+        y ^    /    |
+          |  /      |
+          |/        |
+          +__ ax    |. . . . .  --> x
+         /   --__   |
+        v        --_|
+        z
+
+        */
+      double ax = asin(u.y);
+
+
+      /* ay is the angle between the z axis and the projection of this vector
+         onto the y=0 plane. 
+                    .                             
+                   /                                 
+                 /                                  
+        y ^    /     
+          |  /       
+          |/         
+          +__. . . . . . . . .  --> x
+         /   --__    
+        /  ay    --_ 
+       /-------------
+      v
+      z
+
+      */
+      double ay;
+      bool pos = u.z > 1e-6;
+      bool neg = u.z < -1e-6;
+      if (!(pos || neg))
+        ay = (u.x > 0? 1. : -1.) * M_PI/2;
+      else
+        ay = atan(u.x / fabs(u.z));
+
+      if (neg)
+        ay = M_PI - ay;
+
+      /* Construct the top vector that would have az == 0, according to ax and
+         ay: it is this vector but with an additional ax turn of pi/2 (90°).
+
+         So it is a unit vector, starting from directly on y axis (pointing upward),
+         tilted "backward" (towards negative z axis) by ax,
+         and then turned around the y axis by ay.
+
+         Turns out the zero-top's new y coordinate is the same as the length of
+         this vector's projection onto the y=0 plane: ly = sqrt(x²+z²)
+
+                      | y
+               .___   |         . 
+                \  ---+ly      /|                                
+                 \    ^      /  |                               
+                  \   |    /    |
+                   \ax|  /      |
+                    \ |/        |
+            . . . . . +__ax     |. . . . .  --> x
+                     /   --__   |
+                    /        --_|
+                   /            > ly
+                  v             
+                  z
+
+         Also, the new distance from the z axis == this vector's y coordinate:
+
+                      | 
+            "y".___   |         .y
+                \  -->+    /   /|                                
+                 \    |   /  /  |                               
+                  \   |  / /    |
+               -_<-\ay+>//      |
+                  -.\ |/        |
+            . . . . . +__       |. . . . .  --> x
+                     /   --__   |
+                    /<-ay--> --_V
+                   /            -
+                  v               
+                  z
+
+        So use sin and cos to get x and z coords.
+       */
+
+      Pt top_zero(-u.y * sin(ay),
+                  sqrt(u.x*u.x + u.z*u.z),
+                  -u.y * cos(ay));
+
+      /* Find the angle between the "zero" top and the user supplied top vector.
+       * Both top and top_zero must be in the plane perpendicular to this vector.
+       * Remove any component from top that's pointing in this vector's dir. */
+      Pt topu = top.unit();
+      topu -= u * topu.project(u);
+
+      /* Angle of the "zero" top to the plane-ized and unit-ized user supplied
+       * top, angle sign relative to this vector. */
+      double az = top_zero.angle(topu, u);
+
+      /* I measures the angle from the z axis rightwards. That's counter the
+       * canonical angle direction OpenGL uses, so let's correct for that... */
+      return Pt(M_PI - ax, ay, - az);
     }
 
 
@@ -116,7 +230,10 @@ class Pt {
     }
 
     Pt unit() const {
-      return Pt(*this) / len();
+      double l = len();
+      if (l < 1.e-6)
+        return Pt();
+      return (*this) / l;
     }
 
     void rot_about(const Pt &axis, double rad) {
@@ -160,11 +277,36 @@ class Pt {
         x * p.x + y * p.y + z * p.z;
     }
 
+    Pt cross(const Pt &p) const
+    {
+      return Pt(y * p.z - z * p.y,
+                z * p.x - x * p.z,
+                x * p.y - y * p.x);
+    }
+
+    double min_angle(const Pt &p) const
+    {
+      Pt a = unit();
+      Pt b = p.unit();
+      return acos(a.dot(b));
+    }
+
+    double angle(const Pt &p, const Pt &n) const
+    {
+      Pt a = unit();
+      Pt b = p.unit();
+      Pt nu = n.unit();
+      double ma = acos(a.dot(b));
+      if (nu.dot( a.cross(b) ) < 0)
+        return - ma;
+      return ma;
+    }
+
     double project(const Pt &p) const
     {
       double d = dot(p);
       double sign = (d >= 0? 1. : -1.);
-      return sign * sqrt(fabs(dot(p)));
+      return sign * sqrt(fabs(d));
     }
 
     Pt& operator+=(const Pt &p) {
@@ -243,14 +385,14 @@ class Pt {
     }
 
     void glRotated() {
-      if (z) {
-        ::glRotated(z,0,0,1);
+      if (y) {
+        ::glRotated(y, 0, 1, 0); //cos(x)*M_PI/180, sin(x*M_PI/180));
       }
       if (x) {
         ::glRotated(x,1,0,0);
       }
-      if (y) {
-        ::glRotated(y, 0, 1, 0); //cos(x)*M_PI/180, sin(x*M_PI/180));
+      if (z) {
+        ::glRotated(z,0,0,1);
       }
     }
 
@@ -848,10 +990,8 @@ class Placed {
     Pt rot3;
     Pt scale;
     level_e level;
-    bool xx;
 
     Placed() {
-      xx=false;
       pos.set(0, 0, 0);
       rot3.set(0, 0, 0);
       scale.set(1, 1, 1);
@@ -860,9 +1000,6 @@ class Placed {
 
     void placement(DrawBank &d) {
       d.translate(pos, level);
-      if (xx) {
-        printf("rot3 ");rot3.print();
-      }
       d.rotate(rot3, level);
       d.scale(scale, level);
     }
