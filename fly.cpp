@@ -4,6 +4,7 @@
 #include "ctrl_layers.h"
 #include "draw.h"
 
+static AsQuads as_quads;
 
 void draw_scene();
 
@@ -14,8 +15,7 @@ volatile double dt;
 #define AVG_SHIFTING 3
 float want_fps = 25;
 
-const double maneuver_engines_strength = 0.5;
-const double forward_engines_strength = 2;
+const double engines_strength = 2;
 
 class Fly : public Particle {
   public:
@@ -37,6 +37,7 @@ class Fly : public Particle {
 
   bool do_cruise;
   Param cruise_v;
+
 
 	Fly() : Particle() {
     nose.set(0, 0, -1);
@@ -123,24 +124,6 @@ class Fly : public Particle {
         wings_force = (v_want - mass.v) * wings / dt;
       }
 
-      Pt break_want = mass.v * (-propulsion_break / dt);
-
-      /* main engines component of break force */
-      double forward_drive_break_amount = break_want.project(nose);
-      forward_drive_break_amount = min(forward_drive_break_amount, forward_engines_strength);
-      forward_drive_break_amount = max(forward_drive_break_amount, 0.);
-
-      /* remove main engines part from break force */
-      break_want += nose * forward_drive_break_amount;
-
-      /* remaining components with weaker engines */
-      double break_drive = break_want.len();
-      if (break_drive > maneuver_engines_strength) {
-        break_want *= maneuver_engines_strength / break_drive;
-        break_drive = maneuver_engines_strength;
-      }
-      Pt maneuver_engines = break_want;
-
       double want_propulsion_forward = propulsion_forward;
       if (do_cruise) {
         if ((want_propulsion_forward > 1e-6) || (propulsion_break > 1e-6)) {
@@ -151,17 +134,20 @@ class Fly : public Particle {
           double diff = cruise_v - mass.v.len();
           if (diff > 1e-6) {
             /* we're slowing down below cruising speed. Hit the accelerator a bit. */
-            want_propulsion_forward = (diff / forward_engines_strength) / dt;
+            want_propulsion_forward = diff / engines_strength;
             if (want_propulsion_forward < propulsion_forward)
               want_propulsion_forward = propulsion_forward;
           }
         }
       }
 
-      double forward_drive_amount = max(forward_drive_break_amount, want_propulsion_forward);
-      Pt main_engine_force = nose * (forward_drive_amount * forward_engines_strength);
+      Pt forward_want = nose * (want_propulsion_forward * engines_strength);
+      Pt break_want = mass.v * (-propulsion_break);
 
-      Pt propulsion = main_engine_force + maneuver_engines;
+      Pt propulsion = forward_want + break_want;
+      if (propulsion.len() > engines_strength)
+        propulsion = propulsion.unit() * engines_strength;
+
       mass.accelerate(wings_force + propulsion, dt);
 
       pos += mass.v * dt;
@@ -169,19 +155,17 @@ class Fly : public Particle {
       static int skip = 0;
       if ((skip ++) > 10) {
         skip = 0;
-        printf("v=%5.2f p=%5.2f g=%5.2f break_fwd=%5.2f break_maneuver=%5.2f\n",
+        printf("v=%5.2f p=%5.2f g=%5.2f\n",
                mass.v.len(),
                propulsion.len(),
-               wings_force.len(),
-               forward_drive_break_amount,
-               maneuver_engines.len());
+               wings_force.len()
+              );
       }
   }
 
 
   void draw(DrawBank &bank)
   {
-    static AsQuads as_quads;
     Particle::draw(as_quads, bank);
   }
 };
@@ -216,7 +200,6 @@ class World {
     AsLines as_lines;
     AsPoly as_poly;
     AsTets as_tets;
-    AsQuads as_quads;
     AsTexturePlanes as_texture_planes;
     AsPoints as_points;
 
@@ -354,6 +337,7 @@ class World {
       for (int i = 0; i < clouds.size(); i++) {
         clouds[i].step();
       }
+
     }
 
 
@@ -369,6 +353,29 @@ class World {
 
 World world;
 
+class Osd {
+  public:
+    DrawBank bank;
+
+    Particle speed;
+
+    Osd()
+    {
+      Block b;
+      b.generate(speed);
+      speed.pos.set(-1, -.7, -1);
+    }
+
+    void step() {
+      speed.scale.set(0.01 + sqrt(world.fly.mass.v.len()) / 100, .001 + sqrt(world.fly.mass.v.len()) / 100, .01);
+    }
+
+    void draw() {
+      speed.draw(as_quads, bank);
+    }
+};
+
+Osd osd;
 
 void draw_scene()
 {
@@ -380,6 +387,8 @@ void draw_scene()
   world.cam.gluLookAt();
   world.draw();
 
+  glLoadIdentity( );
+  osd.draw();
   glFlush();
   SDL_GL_SwapBuffers();
 }
@@ -419,17 +428,17 @@ int save_thread(void *arg) {
 void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
   switch(axis)
   {
-  case 1:
   default:
     printf("%d %f\n", axis, (float)axis_val);
     break;
-  case 0:
+  case 3:
     world.fly.roll_y = -(axis_val*axis_val*axis_val) / 10;
     break;
+  case 1:
   case 4:
     world.fly.roll_x = (axis_val*axis_val*axis_val) / 10;
     break;
-  case 3:
+  case 0:
     world.fly.roll_z = (axis_val*axis_val*axis_val) / 10;
     break;
   case 5:
@@ -454,24 +463,32 @@ void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
 }
 
 void on_joy_button(ControllerState &ctrl, int button, bool down) {
-  if (! down)
-    return;
 
   switch (button) {
+  case 3:
+    if (! down) {
+      if (world.fly.wings < 1.e-5) {
+        world.fly.wings = .1;
+        world.fly.do_cruise = true;
+      }
+      else
+      if (world.fly.wings < .9) {
+        world.fly.wings = 1;
+        world.fly.do_cruise = true;
+      }
+      else {
+        world.fly.wings = 0;
+        world.fly.do_cruise = false;
+      }
+    }
+    break;
+
   case 0:
-    if (world.fly.wings < 1.e-5) {
-      world.fly.wings = .1;
-      world.fly.do_cruise = true;
-    }
-    else
-    if (world.fly.wings < .9) {
-      world.fly.wings = 1;
-      world.fly.do_cruise = true;
-    }
-    else {
-      world.fly.wings = 0;
-      world.fly.do_cruise = false;
-    }
+    world.fly.propulsion_forward = down? 1 : 0;
+    break;
+
+  case 1:
+    world.fly.propulsion_break = down? 1 : 0;
     break;
 
   default:
@@ -642,7 +659,7 @@ int main(int argc, char *argv[])
 
   glMatrixMode( GL_PROJECTION );
   glLoadIdentity();
-  gluPerspective(80,(double)W/H,.5,500);
+  gluPerspective(80,(double)W/H,.5,1000);
 
   glEnable(GL_DEPTH_TEST);
   glEnable(GL_BLEND);
@@ -699,6 +716,7 @@ int main(int argc, char *argv[])
 
 
     world.step();
+    osd.step();
 
     draw_scene();
     frames_rendered ++;

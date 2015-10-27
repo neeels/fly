@@ -186,7 +186,11 @@ class Pt {
 
       /* Angle of the "zero" top to the plane-ized and unit-ized user supplied
        * top, angle sign relative to this vector. */
+      printf("top_zero "); top_zero.print();
+      printf("topu "); topu.print();
+      printf("u "); u.print();
       double az = top_zero.angle(topu, u);
+      printf("%g\n", az);
 
       /* I measures the angle from the z axis rightwards. That's counter the
        * canonical angle direction OpenGL uses, so let's correct for that... */
@@ -277,6 +281,14 @@ class Pt {
         x * p.x + y * p.y + z * p.z;
     }
 
+    double udot(const Pt &p) const
+    {
+      Pt u = unit();
+      Pt pu = p.unit();
+      return
+        min(1.0, max(-1.0, u.x * pu.x + u.y * pu.y + u.z * pu.z));
+    }
+
     Pt cross(const Pt &p) const
     {
       return Pt(y * p.z - z * p.y,
@@ -286,18 +298,13 @@ class Pt {
 
     double min_angle(const Pt &p) const
     {
-      Pt a = unit();
-      Pt b = p.unit();
-      return acos(a.dot(b));
+      return acos(this->udot(p));
     }
 
     double angle(const Pt &p, const Pt &n) const
     {
-      Pt a = unit();
-      Pt b = p.unit();
-      Pt nu = n.unit();
-      double ma = acos(a.dot(b));
-      if (nu.dot( a.cross(b) ) < 0)
+      double ma = acos(this->udot(p));
+      if (n.udot( this->cross(p) ) < 0)
         return - ma;
       return ma;
     }
