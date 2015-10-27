@@ -413,7 +413,97 @@ class Pt {
 
 };
 
+class Plane {
+  public:
+    Pt pos;
+    Pt n;
 
+    Plane(const Pt &pos, const Pt &n)
+    {
+      this->pos = pos;
+      this->n = n;
+    }
+
+    Plane(const Pt &p0, const Pt &p1, const Pt &p2)
+    {
+      pos = p0;
+      n = (p1 - p0).cross(p2 - p0);
+    }
+};
+
+class Line {
+  public:
+    Pt pos;
+    Pt len;
+
+    Line(const Pt &pos, const Pt &len)
+    {
+      this->pos = pos;
+      this->len = len;
+    }
+};
+
+bool intersect(const Plane &plane, const Line &line,
+               double *at=NULL, Pt *intersection=NULL)
+{
+  double D = plane.n.dot(line.len);
+  if (fabs(D) < 1e-6)
+    return false;
+
+  double N = plane.n.dot(plane.pos - line.pos);
+  double _at = N / D;
+
+  if (at)
+    *at = _at;
+
+  if ((_at < -1e-6) || (_at > (1. + 1e-6)))
+    return false;
+
+  if (intersection)
+    *intersection = line.pos + line.len * _at;
+
+  return true;
+}
+
+bool intersect(const Pt &p0, const Pt &p1, const Pt &p2, Line &line,
+               double *at=NULL, Pt *intersection=NULL,
+               bool parallelogram=false)
+{
+  double _at;
+  Pt _intersection;
+
+  Pt u = p1 - p0;
+  Pt v = p2 - p0;
+
+  if (! intersect(Plane(p0, u.cross(v)), line, &_at, &_intersection))
+    return false;
+
+  if (at)
+    *at = _at;
+
+  if (intersection)
+    *intersection = _intersection; 
+
+  Pt w = _intersection - p0;
+
+  double udotv = u.dot(v);
+  double wdotv = w.dot(v);
+  double vdotv = v.dot(v);
+  double wdotu = w.dot(u);
+  double udotu = u.dot(u);
+
+  double D = udotv * udotv - udotu * vdotv;
+
+  double uu = ( udotv * wdotv - vdotv * wdotu ) / D;
+  if ((uu < -1e-6) || (uu > (1. + 1e-6)))
+    return false;
+
+  double vv = ( udotv * wdotu - udotu * wdotv ) / D;
+  if ((vv < -1e-6) || (vv > (1. + 1e-6)))
+    return false;
+
+  return parallelogram || ((vv + uu) < (1. + 1e-6));
+}
 
 
 class Color {
