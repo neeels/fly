@@ -1,3 +1,6 @@
+#include <stdlib.h>
+#include <time.h>
+
 #define Pf(V) printf(#V "=%f\n", (float)V)
 #define Pi(V) printf(#V "=%d\n", (int)V)
 
@@ -5,8 +8,8 @@
 #include "draw.h"
 
 static AsQuads as_quads;
+static AsLines as_lines;
 
-void draw_scene();
 
 bool running = true;
 volatile int frames_rendered = 0;
@@ -15,14 +18,328 @@ volatile double dt;
 #define AVG_SHIFTING 3
 float want_fps = 25;
 
-const double engines_strength = 2;
+struct Face {
+  static const unsigned int N = 3;
+  unsigned int point_idx[Face::N];
 
-class Fly : public Particle {
-  public:
+  void load(const unsigned int idxs[Face::N])
+  {
+    memcpy(point_idx, idxs, sizeof(point_idx));
+  }
+};
+
+
+struct Orientation {
   Pt nose;
   Pt top;
+
+  Orientation()
+    : nose(0, 0, -1),
+      top(0, 1, 0)
+  {}
+
+  Pt right() {
+    return nose.cross(top);
+  }
+
+  void rotate(double roll_x, double roll_y, double roll_z)
+  {
+      nose.rot_about(top, roll_y);
+      Pt r = right();
+      nose.rot_about(r, roll_x);
+      top.rot_about(r, roll_x);
+      top.rot_about(nose, roll_z);
+  }
+
+  void rotate(Pt r3)
+  {
+    rotate(r3.x, r3.y, r3.z);
+  }
+
+  void glRotated() const {
+    rot3().glRotated();
+  }
+
+  void check_normals() {
+      nose = nose.unit();
+      top = top.unit();
+
+      double is_ortho = nose.dot(top);
+      if (fabs(is_ortho) > 1.e-6)
+        printf("ORTHO! %g\n", is_ortho);
+  }
+
+
+  Pt rot3() const {
+    double l = nose.len();
+    if (fabs(l) < 1.e-6) {
+      return Pt();
+    }
+
+    /* "first roll left/right about the nose axis by angle az (around z axis),
+        then turn the nose up/down by angle ax (around the x axis),
+        then turn left/right by angle ay (around the vertical y axis)."
+
+        ^ y
+        |
+        | az
+     ax +------> x
+       / ay
+      v
+      z
+
+      This vector is the result of those rotations, the top vector points
+      "upwards", and we're trying to find out ax, ay, and az.
+     */
+
+    Pt u = nose.unit();
+
+    /* ax is the angle between the y=0 plane and this vector.
+                                              
+                  .                             
+                 /|                                
+               /  |                               
+      y ^    /    |
+        |  /      |
+        |/        |
+        +__ ax    |. . . . .  --> x
+       /   --__   |
+      v        --_|
+      z
+
+      */
+    double ax = asin(u.y);
+
+
+    /* ay is the angle between the z axis and the projection of this vector
+       onto the y=0 plane. 
+                  .                             
+                 /                                 
+               /                                  
+      y ^    /     
+        |  /       
+        |/         
+        +__. . . . . . . . .  --> x
+       /   --__    
+      /  ay    --_ 
+     /-------------
+    v
+    z
+
+    */
+    double ay;
+    bool pos = u.z > 1e-6;
+    bool neg = u.z < -1e-6;
+    if (!(pos || neg))
+      ay = (u.x > 0? 1. : -1.) * M_PI/2;
+    else
+      ay = atan(u.x / fabs(u.z));
+
+    if (neg)
+      ay = M_PI - ay;
+
+    /* Construct the top vector that would have az == 0, according to ax and
+       ay: it is this vector but with an additional ax turn of pi/2 (90°).
+
+       So it is a unit vector, starting from directly on y axis (pointing upward),
+       tilted "backward" (towards negative z axis) by ax,
+       and then turned around the y axis by ay.
+
+       Turns out the zero-top's new y coordinate is the same as the length of
+       this vector's projection onto the y=0 plane: ly = sqrt(x²+z²)
+
+                    | y
+             .___   |         . 
+              \  ---+ly      /|                                
+               \    ^      /  |                               
+                \   |    /    |
+                 \ax|  /      |
+                  \ |/        |
+          . . . . . +__ax     |. . . . .  --> x
+                   /   --__   |
+                  /        --_|
+                 /            > ly
+                v             
+                z
+
+       Also, the new distance from the z axis == this vector's y coordinate:
+
+                    | 
+          "y".___   |         .y
+              \  -->+    /   /|                                
+               \    |   /  /  |                               
+                \   |  / /    |
+             -_<-\ay+>//      |
+                -.\ |/        |
+          . . . . . +__       |. . . . .  --> x
+                   /   --__   |
+                  /<-ay--> --_V
+                 /            -
+                v               
+                z
+
+      So use sin and cos to get x and z coords.
+     */
+
+    Pt top_zero(-u.y * sin(ay),
+                sqrt(u.x*u.x + u.z*u.z),
+                -u.y * cos(ay));
+
+    /* Find the angle between the "zero" top and the user supplied top vector.
+     * Both top and top_zero must be in the plane perpendicular to this vector.
+     * Remove any component from top that's pointing in this vector's dir. */
+    Pt topu = top.unit();
+    if (fabs(u.dot(topu)) > 1e-6) {
+      printf("ORTHO! %g " __FILE__ " line %d\n", fabs(u.dot(topu)), __LINE__);
+    }
+    //topu -= u * topu.project(u);
+
+    /* Angle of the "zero" top to the plane-ized and unit-ized user supplied
+     * top, angle sign relative to this vector. */
+    double az = top_zero.angle(topu, u);
+
+    /* I measured the angle from the z axis rightwards. That's counter the
+     * canonical angle direction OpenGL uses, so let's correct for that... */
+    return Pt(M_PI - ax, ay, - az);
+  }
+
+};
+
+class Visible {
+  public:
+    vector<Point> points;
+    vector<Face> faces;
+    Pt scale;
+    Pt pos;
+    Orientation ori;
+
+    Visible() {
+      scale.set(1, 1, 1);
+    }
+
+    Point &add_point()
+    {
+      points.resize(points.size() + 1);
+      return points.back();
+    }
+
+    Face &add_face()
+    {
+      faces.resize(faces.size() + 1);
+      return faces.back();
+    }
+
+    void draw()
+    {
+      glPushMatrix();
+
+      pos.glTranslated();
+      ori.glRotated();
+      scale.glScaled();
+
+      int l;
+      Draw::begin(GL_TRIANGLES);
+
+      l = faces.size();
+      for (int i = 0; i < l; i++) {
+        Face &face = faces[i];
+        for (int j = 0; j < Face::N; j++) {
+          Draw::color_point(points[face.point_idx[j]]);
+        }
+      }
+
+      Draw::end();
+
+      glPopMatrix();
+    }
+
+    void load_points(const double points[][3], int n_points)
+    {
+      for (int i = 0; i < n_points; i++)
+        add_point().load(points[i]);
+    }
+
+    void load_faces(const unsigned int faces[][3], int n_faces)
+    {
+      for (int i = 0; i < n_faces; i++)
+        add_face().load(faces[i]);
+    }
+
+    void load_colors(const double colors[][4], int n_colors, bool cycle=true)
+    {
+      int p = 0;
+      while (p < points.size()) {
+        for (int i = 0; i < n_colors; i++, p++) {
+          points[p].c.load(colors[i]);
+        }
+        if (! cycle)
+          break;
+      }
+    }
+};
+
+#define ARRAY_SIZE(X) (sizeof(X)/sizeof(*X))
+
+void make_block(Visible &v) {
+  static double points[][3] = {
+    {-.5, -.5, -.5},
+    {-.5, -.5,  .5},
+    {-.5,  .5,  .5},
+    {-.5,  .5, -.5},
+    { .5, -.5, -.5},
+    { .5, -.5,  .5},
+    { .5,  .5,  .5},
+    { .5,  .5, -.5},
+  };
+
+  // side: a rectangle from two triangles
+#define side(A, B, C, D) \
+  {A, B, C}, \
+  {C, D, A} 
+
+  static unsigned int faces[][3] = {
+    side(0, 1, 2, 3),
+    side(0, 1, 5, 4),
+    side(1, 2, 6, 5),
+    side(4, 5, 6, 7),
+    side(2, 3, 7, 6),
+    side(3, 0, 4, 7)
+  };
+#undef side
+
+  v.load_points(points, ARRAY_SIZE(points));
+  v.load_faces(faces, ARRAY_SIZE(faces));
+}
+
+void color_scheme(Visible &b, const Pt &base_rgb) {
+  for (int i = 0; i < b.points.size(); i ++) {
+    b.points[i].c = (base_rgb + Pt::random(-.1, .1)).limit(0, 1);
+  }
+}
+
+class Ufo : public Visible {
+  public:
+
+    bool animate;
+    Pt v;
+    Pt v_ang;
+
+    virtual void step() {};
+};
+
+class FlyingBlock : public Ufo {
+  public:
+    FlyingBlock() {
+      make_block(*this);
+      color_scheme(*this, Pt::random(0.1, 1));
+    }
+};
+
+const double engines_strength = 100;
+
+class Fly : public Ufo {
+  public:
   Pt top_lag;
-  Pt right;
 
   Param top_angle;
   Param roll_x;
@@ -39,23 +356,24 @@ class Fly : public Particle {
   Param cruise_v;
 
 
-	Fly() : Particle() {
-    nose.set(0, 0, -1);
-    top.set(0, 1, 0);
-    top_lag = top;
-    right.set(1, 0, 0);
-    update_normals();
+	Fly() : Ufo() {
+    ori.nose.set(0, 0, -1);
+    ori.top.set(0, 1, 0);
+    top_lag = ori.top;
     roll_x.slew = .94;
     roll_y.slew = .94;
     roll_z.slew = .94;
+    propulsion_forward.slew = .1;
+    propulsion_break.slew = .1;
+    cruise_v.slew = 0;
     wings.limit(0, 1);
     wings = .1;
 
     do_cruise = true;
     cruise_v = .05;
 
-    Block b;
-    b.generate(*this);
+    make_block(*this);
+    color_scheme(*this, Pt(.2, .6, .2));
 
     int l = points.size();
     for (int i = 0; i < l; i++) {
@@ -67,29 +385,8 @@ class Fly : public Particle {
     }
 	}
 
-  void update_normals() {
-      nose = nose.unit();
 
-      //top.set(nose.y, nose.z, nose.x);
-      //top.rot_about(nose, top_angle);
-      top = top.unit();
-
-      //right.set(nose.z, nose.x, nose.y);
-      //right.rot_about(nose, top_angle);
-      right = right.unit();
-
-      double is_ortho_top = nose.x * top.x + nose.y * top.y + nose.z * top.z;
-      double is_ortho_right = nose.x * right.x + nose.y * right.y + nose.z * right.z;
-      if ((fabs(is_ortho_top) > 1.e-6)
-          || (fabs(is_ortho_right) > 1.e-6)) {
-        printf("ORTHO! %g %g\n", is_ortho_top, is_ortho_right);
-      }
-
-      rot3 = nose.cart2ang(top) * (180./M_PI);
-  }
-
-
-  void step(void) {
+  virtual void step(void) {
       roll_x.step();
       roll_y.step();
       roll_z.step();
@@ -99,19 +396,11 @@ class Fly : public Particle {
       wings.step();
       cruise_v.step();
 
-      nose.rot_about(top, roll_y);
-      right.rot_about(top, roll_y);
-
-      nose.rot_about(right, roll_x);
-      top.rot_about(right, roll_x);
-
-      top.rot_about(nose, roll_z);
-      right.rot_about(nose, roll_z);
-
-      update_normals();
+      ori.rotate(roll_x, roll_y, roll_z);
+      ori.check_normals();
 
       const int div = 10;
-      top_lag = (top_lag * (div-1) + top) / div;
+      top_lag = (top_lag * (div-1) + ori.top) / div;
 
 
       Pt wings_force;
@@ -120,7 +409,7 @@ class Fly : public Particle {
         return;
 
       if (wings > 1.e-5) {
-        Pt v_want = nose * mass.v.len();
+        Pt v_want = ori.nose * mass.v.len();
         wings_force = (v_want - mass.v) * wings / dt;
       }
 
@@ -134,14 +423,14 @@ class Fly : public Particle {
           double diff = cruise_v - mass.v.len();
           if (diff > 1e-6) {
             /* we're slowing down below cruising speed. Hit the accelerator a bit. */
-            want_propulsion_forward = diff / engines_strength;
+            want_propulsion_forward = (10. * diff) / engines_strength;
             if (want_propulsion_forward < propulsion_forward)
               want_propulsion_forward = propulsion_forward;
           }
         }
       }
 
-      Pt forward_want = nose * (want_propulsion_forward * engines_strength);
+      Pt forward_want = ori.nose * (want_propulsion_forward * engines_strength);
       Pt break_want = mass.v * (-propulsion_break);
 
       Pt propulsion = forward_want + break_want;
@@ -163,11 +452,6 @@ class Fly : public Particle {
       }
   }
 
-
-  void draw(DrawBank &bank)
-  {
-    Particle::draw(as_quads, bank);
-  }
 };
 
 
@@ -189,195 +473,109 @@ struct Camera {
   }
 };
 
+const int world_r = 1000;
+const int max_block_size = 30;
 
 class World {
   public:
-    palette_t palette;
-
-    vector<Cloud> clouds;
-
-    AsTriangles as_triangles;
-    AsLines as_lines;
-    AsPoly as_poly;
-    AsTets as_tets;
-    AsTexturePlanes as_texture_planes;
-    AsPoints as_points;
-
-    DrawBank cloud_bank;
-    DrawBank fixed_bank;
-    Quake quake;
-    PointQuake point_quake;
-    Explode explode;
-    Scale particle_scale;
-    ChangeColor change_color;
-    ChangeColor change_color2;
-    StrobeCloud strobe_cloud;
-    Revolve revolve;
-
-    Texture metal;
-
     Fly fly;
     Camera cam;
+    FlyingBlock debris[10 * world_r / max_block_size];
 
-    World() : revolve(1) {
+    vector<Ufo*> ufos;
 
-      make_palettes();
-      make_palette(&palette, PALETTE_LEN,
-                   palette_defs[0]);
+    World() {
+      for (int i = 0; i < ARRAY_SIZE(debris); i++) {
+        FlyingBlock &b = debris[i];
+        b.pos = Pt::random(-world_r, world_r);
+        b.scale = Pt::random(1, max_block_size);
+        b.ori.rotate(Pt::random() * 2 * M_PI);
 
-      as_texture_planes.texture = &metal;
-
-      clouds.resize(2);
-      {
-        Cloud &c = clouds[0];
-
-        if (1) {
-          RandomPoints rpo;
-          Block blockpoints;
-          RandomParticles rpa(&blockpoints);
-          rpa.n = 1000;
-          rpa.pos_range = 500;
-          rpa.scale_min = 1;
-          rpa.scale_max = 30;
-
-          rpa.generate(c);
-        }
-        if (0)
-        {
-          Particle p;
-          p.points.resize(4);
-          p.points[0].set(-1, -1, 0);
-          p.points[3].set( 1, -1, 0);
-          p.points[2].set( 1,  1, 0);
-          p.points[1].set(-1,  1, 0);
-          p.pos.set(0, 0, -0.5);
-
-          c.particles.push_back(p);
-
-          p.pos.set(0, 0, 0.5);
-          c.particles.push_back(p);
-
-          int i;
-          for (i = 0; i < c.particles.size(); i++) {
-            printf("%p ", &(c.particles[i]));
-            c.particles[i].pos.print();
-            p.points[3].print();
-            printf(" %p\n", &(c.particles[i].pos));
-          }
-          c.particles[1].pos.set(0, 0, .6);
-          for (i = 0; i < c.particles.size(); i++) {
-            printf("%p ", &(c.particles[i]));
-            c.particles[i].pos.print();
-            p.points[3].print();
-            printf(" %p\n", &(c.particles[i].pos));
-          }
-        }
-        if (0)
-        {
-          Particle &p = c.add_particle();
-          p.points.resize(4);
-          p.points[0].set(-1, -1, 0);
-          p.points[1].set( 1, -1, 0);
-          p.points[2].set( 1,  1, 0);
-          p.points[3].set(-1,  1, 0);
-          p.pos.set(0, 0, -0.5);
-        }
-        
-        
-        //RandomPoints b;
-        //b.n = 16;
-        Block b;
-        WriteInBlocks say("front");
-        say.block_pitch.set(1, 1, 1);
-        say.point_genesis = &b;
-        say.generate(c);
-         
-        c.pos.set(0, 0, -40);
-
-        Cloud &c2 = clouds[1];
-        c2.pos.set(0, 0, -45);
-        WriteInBlocks say2("back");
-        say2.block_pitch.set(1, 1, 1);
-        say2.point_genesis = &b;
-        say2.generate(c2);
-
-        /*
-        clouds.resize(3);
-        clouds[2].pos.set(0, 0, 0);
-        clouds[2].scale.set(1,  1, 1);
-        say.generate(clouds[2]);
-        */
+        add(b);
       }
 
-      change_color.pal = &palette;
-      cloud_bank.add(change_color);
-      cloud_bank.add(revolve);
+      add(fly);
+    }
 
-      change_color2.pal = &palette;
-      fixed_bank.add(change_color2);
+    void add(Ufo &u) {
+      ufos.resize(ufos.size() + 1);
+      ufos.back() = &u;
     }
 
     void load() {
-      metal.load("images/metal091.jpg");
     }
 
     void step() {
+      for (int i = 0; i < ufos.size(); i++) {
+        ufos[i]->step();
+      }
+      wrap(fly.pos + fly.ori.nose * (world_r/2), world_r);
 
-      fly.step();
       Pt dir = fly.mass.v.unit();
       if (! dir.zero())
-        dir = (dir + fly.nose.unit()) / 2;
+        dir = (dir + fly.ori.nose.unit()) / 2;
       else
-        dir = fly.nose;
+        dir = fly.ori.nose;
 
       cam.look_at(fly.pos + fly.top_lag,
                   dir.unit() * (-3),
                   fly.top_lag);
-
-      for (int i = 0; i < clouds.size(); i++) {
-        clouds[i].step();
-      }
-
     }
 
 
     void draw() {
-      for (int i = 0; i < clouds.size(); i++) {
-        clouds[i].draw(as_quads, cloud_bank);
+      for (int i = 0; i < ufos.size(); i++) {
+        ufos[i]->draw();
       }
-      fly.draw(fixed_bank);
-      fixed_bank.end_of_frame();
-      cloud_bank.end_of_frame();
+    }
+
+    void wrap(const Pt &center, double dist) {
+      for (int i = 0; i < ufos.size(); i++) {
+        ufos[i]->pos.wrap(center, dist);
+      }
     }
 };
 
-World world;
 
 class Osd {
   public:
     DrawBank bank;
 
-    Particle speed;
+    FlyingBlock speed;
+    bool draw_want_speed;
+    FlyingBlock want_speed;
 
     Osd()
     {
-      Block b;
-      b.generate(speed);
       speed.pos.set(-1, -.7, -1);
+      want_speed.pos.set(-1, -.7, -1.002);
     }
 
-    void step() {
-      speed.scale.set(0.01 + sqrt(world.fly.mass.v.len()) / 100, .001 + sqrt(world.fly.mass.v.len()) / 100, .01);
+    void update(const World &world) {
+      double v = sqrt(world.fly.mass.v.len()) / 10;
+      speed.scale.set(.001 + v/10, .02, .001);
+      double c[][4] = {{1, min(.8*v, 1.), .3, .7}, {.95, min(.8*v * 1.1, 1.), .28, .7}};
+      speed.load_colors(c, ARRAY_SIZE(c));
+
+      if (world.fly.do_cruise) {
+        v = sqrt(world.fly.cruise_v) / 10;
+        want_speed.scale.set(.001 + v/10, .02, .001);
+        double d[][4] = {{1, min(v, 1.), .0, 1}, {.95, min(v * 1.1, 1.), .0, 1}};
+        want_speed.load_colors(d, ARRAY_SIZE(d));
+        draw_want_speed = true;
+      }
+      else
+        draw_want_speed = false;
     }
 
     void draw() {
-      speed.draw(as_quads, bank);
+      speed.draw();
+      if (draw_want_speed)
+        want_speed.draw();
     }
 };
 
-Osd osd;
-
-void draw_scene()
+void draw_scene(World &world, Osd &osd)
 {
   glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
 
@@ -400,8 +598,8 @@ FILE *in_params = NULL;
 
 char *audio_path = NULL;
 
-int W = 1400;//1920;
-int H = 900;//1080;
+int W = 1920;
+int H = 900;//1200;
 
 SDL_Surface *screen = NULL;
 
@@ -424,6 +622,7 @@ int save_thread(void *arg) {
   return 0;
 }
 
+World *gl_world;
 
 void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
   switch(axis)
@@ -432,14 +631,14 @@ void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
     printf("%d %f\n", axis, (float)axis_val);
     break;
   case 3:
-    world.fly.roll_y = -(axis_val*axis_val*axis_val) / 10;
+    gl_world->fly.roll_y = -(axis_val*axis_val*axis_val) / 10;
     break;
   case 1:
   case 4:
-    world.fly.roll_x = (axis_val*axis_val*axis_val) / 10;
+    gl_world->fly.roll_x = (axis_val*axis_val*axis_val) / 10;
     break;
   case 0:
-    world.fly.roll_z = (axis_val*axis_val*axis_val) / 10;
+    gl_world->fly.roll_z = (axis_val*axis_val*axis_val) / 10;
     break;
   case 5:
     // analog trigger ... -1 == not pressed, 0 = half, 1 = full
@@ -447,7 +646,7 @@ void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
 #if 0
     world.fly.velocity.change = ((axis_val + 1) / 2) / 200;
 #else
-    world.fly.propulsion_forward = (axis_val + 1) / 2;
+    gl_world->fly.propulsion_forward = (axis_val + 1) / 2;
 #endif
     break;
   case 2:
@@ -456,7 +655,7 @@ void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
 #if 0
     world.fly.velocity.change = -((axis_val + 1) / 2) / 200;
 #else
-    world.fly.propulsion_break = (axis_val + 1) / 2;
+    gl_world->fly.propulsion_break = (axis_val + 1) / 2;
 #endif
     break;
   }
@@ -467,28 +666,28 @@ void on_joy_button(ControllerState &ctrl, int button, bool down) {
   switch (button) {
   case 3:
     if (! down) {
-      if (world.fly.wings < 1.e-5) {
-        world.fly.wings = .1;
-        world.fly.do_cruise = true;
+      if (gl_world->fly.wings < 1.e-5) {
+        gl_world->fly.wings = .1;
+        gl_world->fly.do_cruise = true;
       }
       else
-      if (world.fly.wings < .9) {
-        world.fly.wings = 1;
-        world.fly.do_cruise = true;
+      if (gl_world->fly.wings < .9) {
+        gl_world->fly.wings = 1;
+        gl_world->fly.do_cruise = true;
       }
       else {
-        world.fly.wings = 0;
-        world.fly.do_cruise = false;
+        gl_world->fly.wings = 0;
+        gl_world->fly.do_cruise = false;
       }
     }
     break;
 
   case 0:
-    world.fly.propulsion_forward = down? 1 : 0;
+    gl_world->fly.propulsion_forward = down? 1 : 0;
     break;
 
   case 1:
-    world.fly.propulsion_break = down? 1 : 0;
+    gl_world->fly.propulsion_break = down? 1 : 0;
     break;
 
   default:
@@ -659,16 +858,26 @@ int main(int argc, char *argv[])
 
   glMatrixMode( GL_PROJECTION );
   glLoadIdentity();
-  gluPerspective(80,(double)W/H,.5,1000);
+  gluPerspective(80,(double)W/H,.5,world_r);
 
   glEnable(GL_DEPTH_TEST);
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
 
+  printf("seed %d\n", (int)ip.random_seed);
+  srandom(ip.random_seed);
+
+  World world;
+  gl_world = &world;
+
+  Osd osd;
+
+  printf("%d\n", (int)(frandom() * 1000));
+
   world.load();
 
-  draw_scene();
+  draw_scene(world, osd);
 
   Uint32 last_time = SDL_GetTicks();
   Uint32 current_time,elapsed_time;
@@ -681,20 +890,6 @@ int main(int argc, char *argv[])
     }
     out_stream = fopen(out_stream_path, "w");
   }
-
-  /*
-  double dragon_r = .3;
-  double dragon_r_target = .3;
-  double dragon_r_change = 0;
-  double dragon_fold = 1;
-  double dragon_points = 1;
-
-  double rot_x = 0;
-  double rot_z = 0;
-  double want_vision = 0;
-  double alpha = 0;
-  double want_alpha = 0;
-  */
 
   please_save = SDL_CreateSemaphore(0);
   saving_done = SDL_CreateSemaphore(1);
@@ -714,11 +909,10 @@ int main(int argc, char *argv[])
   while (running)
   {
 
-
     world.step();
-    osd.step();
+    osd.update(world);
 
-    draw_scene();
+    draw_scene(world, osd);
     frames_rendered ++;
 
     {

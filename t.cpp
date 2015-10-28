@@ -377,10 +377,10 @@ void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
       switch(axis)
       {
         case 1:
-          animation.rot_x.change = (axis_val*axis_val*axis_val) * 6;
+          animation.rot_x.change = (axis_val*axis_val*axis_val) / 6;
           break;
         case 0:
-          animation.rot_z.change = (axis_val*axis_val*axis_val) * 6;
+          animation.rot_z.change = (axis_val*axis_val*axis_val) / 6;
           break;
         case 7:
           break;

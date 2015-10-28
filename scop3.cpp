@@ -1128,8 +1128,6 @@ int main(int argc, char *argv[])
   const int n_joysticks = SDL_NumJoysticks();
   controller_state_init(n_joysticks);
 
-
-  
   SDL_Joystick **joysticks = NULL;
 
   if (n_joysticks) {

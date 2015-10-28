@@ -8,7 +8,7 @@ t: t.cpp palettes.h palettes.o ctrl_layers.h textures.o font.h draw.h
 	g++ -g -o t t.cpp palettes.o textures.o -lGL -lGLU -lSDL -lSDL_image -lm
   
 fly: fly.cpp palettes.h palettes.o ctrl_layers.h textures.o font.h draw.h
-	g++ -g -o fly fly.cpp palettes.o textures.o -lGL -lGLU -lSDL -lSDL_image -lm
+	g++ -std=c++11 -g -o fly fly.cpp palettes.o textures.o -lGL -lGLU -lSDL -lSDL_image -lm
   
 palettes.o: palettes.h palettes.c
 	gcc -g -c -o palettes.o palettes.c

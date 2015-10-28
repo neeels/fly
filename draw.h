@@ -15,8 +15,8 @@ using namespace std;
 #include "palettes.h"
 #include "textures.h"
 
-float frandom(void) {
-  return (float)(random()) / INT_MAX;
+double frandom(void) {
+  return (double)(random()) / INT_MAX;
 }
 
 class Pt {
@@ -40,193 +40,21 @@ class Pt {
       this->z = z;
     }
 
-    void random() {
-      x = -1. + 2.*frandom();
-      y = -1. + 2.*frandom();
-      z = -1. + 2.*frandom();
+    void load(const double coords[3]) {
+      x = coords[0];
+      y = coords[1];
+      z = coords[2];
+    }
+
+    static Pt random(double min_l=-1, double max_l=1)
+    {
+      return Pt(min_l + (max_l - min_l) * frandom(),
+                min_l + (max_l - min_l) * frandom(),
+                min_l + (max_l - min_l) * frandom());
     }
 
     bool zero() const {
       return (!x) && (!y) && (!z);
-    }
-
-    void ang2cart_xy(double ax, double ay, double r) {
-      set(r * cos(ax) * sin(ay),
-          r * sin(ax),
-          r * cos(ax) * sin(ay)
-          );
-    }
-
-    Pt ang2cart_xy() const {
-      Pt p;
-      p.ang2cart_xy(x, y, z);
-      return p;
-    }
-
-    Pt cart2ang(const Pt &top) const {
-      double l = len();
-      if (fabs(l) < 1.e-6) {
-        return Pt();
-      }
-
-      /* "first roll left/right about the nose axis by angle az (around z axis),
-          then turn the nose up/down by angle ax (around the x axis),
-          then turn left/right by angle ay (around the vertical y axis)."
-
-          ^ y
-          |
-          | az
-       ax +------> x
-         / ay
-        v
-        z
-
-        This vector is the result of those rotations, the top vector points
-        "upwards", and we're trying to find out ax, ay, and az.
-       */
-
-      Pt u = unit();
-
-      /* ax is the angle between the y=0 plane and this vector.
-                                                
-                    .                             
-                   /|                                
-                 /  |                               
-        y ^    /    |
-          |  /      |
-          |/        |
-          +__ ax    |. . . . .  --> x
-         /   --__   |
-        v        --_|
-        z
-
-        */
-      double ax = asin(u.y);
-
-
-      /* ay is the angle between the z axis and the projection of this vector
-         onto the y=0 plane. 
-                    .                             
-                   /                                 
-                 /                                  
-        y ^    /     
-          |  /       
-          |/         
-          +__. . . . . . . . .  --> x
-         /   --__    
-        /  ay    --_ 
-       /-------------
-      v
-      z
-
-      */
-      double ay;
-      bool pos = u.z > 1e-6;
-      bool neg = u.z < -1e-6;
-      if (!(pos || neg))
-        ay = (u.x > 0? 1. : -1.) * M_PI/2;
-      else
-        ay = atan(u.x / fabs(u.z));
-
-      if (neg)
-        ay = M_PI - ay;
-
-      /* Construct the top vector that would have az == 0, according to ax and
-         ay: it is this vector but with an additional ax turn of pi/2 (90°).
-
-         So it is a unit vector, starting from directly on y axis (pointing upward),
-         tilted "backward" (towards negative z axis) by ax,
-         and then turned around the y axis by ay.
-
-         Turns out the zero-top's new y coordinate is the same as the length of
-         this vector's projection onto the y=0 plane: ly = sqrt(x²+z²)
-
-                      | y
-               .___   |         . 
-                \  ---+ly      /|                                
-                 \    ^      /  |                               
-                  \   |    /    |
-                   \ax|  /      |
-                    \ |/        |
-            . . . . . +__ax     |. . . . .  --> x
-                     /   --__   |
-                    /        --_|
-                   /            > ly
-                  v             
-                  z
-
-         Also, the new distance from the z axis == this vector's y coordinate:
-
-                      | 
-            "y".___   |         .y
-                \  -->+    /   /|                                
-                 \    |   /  /  |                               
-                  \   |  / /    |
-               -_<-\ay+>//      |
-                  -.\ |/        |
-            . . . . . +__       |. . . . .  --> x
-                     /   --__   |
-                    /<-ay--> --_V
-                   /            -
-                  v               
-                  z
-
-        So use sin and cos to get x and z coords.
-       */
-
-      Pt top_zero(-u.y * sin(ay),
-                  sqrt(u.x*u.x + u.z*u.z),
-                  -u.y * cos(ay));
-
-      /* Find the angle between the "zero" top and the user supplied top vector.
-       * Both top and top_zero must be in the plane perpendicular to this vector.
-       * Remove any component from top that's pointing in this vector's dir. */
-      Pt topu = top.unit();
-      topu -= u * topu.project(u);
-
-      /* Angle of the "zero" top to the plane-ized and unit-ized user supplied
-       * top, angle sign relative to this vector. */
-      printf("top_zero "); top_zero.print();
-      printf("topu "); topu.print();
-      printf("u "); u.print();
-      double az = top_zero.angle(topu, u);
-      printf("%g\n", az);
-
-      /* I measures the angle from the z axis rightwards. That's counter the
-       * canonical angle direction OpenGL uses, so let's correct for that... */
-      return Pt(M_PI - ax, ay, - az);
-    }
-
-
-    void ang2cart_yz(double r, double ay, double az) {
-      set(r * cos(ay) * cos(az),
-          r * cos(ay) * sin(az),
-          r * sin(ay));
-    }
-
-    Pt ang2cart_yz() const {
-      Pt p;
-      p.ang2cart_yz(x, y, z);
-      return p;
-    }
-
-    Pt cart2ang_yz() const {
-      // dunno
-      double r = len();
-      if (fabs(r) < 1e-5) {
-        return Pt();
-      }
-
-      double ay = acos(z / r);
-      double az;
-      if (fabs(x) < 1e-5) {
-        az = 0;
-      }
-      else {
-        az = atan(y / x);
-      }
-
-      return Pt(r, ay, az);
     }
 
     double len() const {
@@ -273,6 +101,22 @@ class Pt {
       x = max(x, p.x);
       y = max(y, p.y);
       z = max(z, p.z);
+    }
+
+    Pt &limit(double c_min, double c_max) {
+      x = min(c_max, max(c_min, x));
+      y = min(c_max, max(c_min, y));
+      z = min(c_max, max(c_min, z));
+      return *this;
+    }
+
+    int wrap(const Pt &center, double dist) {
+      Pt d = (center - (*this));
+      if (d.len() > dist) {
+        *this += d.unit() * (dist*2);
+        return 1;
+      }
+      return 0;
     }
 
     double dot(const Pt &p) const
@@ -382,32 +226,52 @@ class Pt {
       return x;
     }
 
+    Pt operator+(const double f) const {
+      Pt x(*this);
+      x += f;
+      return x;
+    }
 
-    void glVertex3d() {
+    Pt operator-(const double f) const {
+      Pt x(*this);
+      x -= f;
+      return x;
+    }
+
+
+    void glVertex3d() const
+    {
       ::glVertex3d(x, y, z);
     }
 
-    void glTranslated() {
+    void glTranslated() const
+    {
       ::glTranslated(x, y, z);
     }
 
-    void glRotated() {
+    void glRotated() const
+    {
+      // last, turn left/right
       if (y) {
-        ::glRotated(y, 0, 1, 0); //cos(x)*M_PI/180, sin(x*M_PI/180));
+        ::glRotated(y * (180./M_PI), 0,1,0);
       }
+      // second, turn nose up or down
       if (x) {
-        ::glRotated(x,1,0,0);
+        ::glRotated(x * (180./M_PI), 1,0,0);
       }
+      // first, roll left or right
       if (z) {
-        ::glRotated(z,0,0,1);
+        ::glRotated(z * (180./M_PI), 0,0,1);
       }
     }
 
-    void glScaled() {
+    void glScaled() const
+    {
       ::glScaled(x, y, z);
     }
 
-    void print() {
+    void print() const
+    {
       printf("x%5.2f y%5.2f z%5.2f\n", x, y, z);
     }
 
@@ -530,6 +394,13 @@ class Color {
       this->b = rgb.b;
     }
 
+    void load(const double color[4]) {
+      this->r = color[0];
+      this->g = color[1];
+      this->b = color[2];
+      this->a = color[3];
+    }
+
     void blend(Color &c, double fade) {
       double rfade = 1.0 - fade;
       r = rfade * r  +  fade * c.r;
@@ -567,6 +438,11 @@ class Color {
       printf("r%f g%f b%f a%f\n", r,g,b,a);
     }
 
+    Color& operator=(const Pt &p) {
+      r = p.x;
+      g = p.y;
+      b = p.z;
+    }
 };
 
 
@@ -605,6 +481,15 @@ class Texture {
     void load(const char *path) {
       id = load_texture(path, false);
       printf("Loaded texture %x: %s\n", (int)id, path);
+    }
+
+    void begin() {
+      glEnable(GL_TEXTURE_2D);
+      glBindTexture(GL_TEXTURE_2D, id);
+    }
+
+    void end() {
+      glDisable(GL_TEXTURE_2D);
     }
 };
 
@@ -690,6 +575,47 @@ void vector_rm(V &v, T &item) {
     }
   }
 }
+
+/* Laugh if you might, yet this gives a nice overview of drawing primitives. */
+class Draw {
+  public:
+    static void point(Pt &p) {
+      p.glVertex3d();
+    }
+
+    static void color(Color &c) {
+      c.glColor();
+    }
+
+    static void color_point(Point &p) {
+      color(p.c);
+      point(p);
+    }
+
+    static void texture_coord(double cx, double cy) {
+      ::glTexCoord2d(cx, cy);
+    }
+
+    static void translate(Pt &p) {
+      p.glTranslated();
+    }
+
+    static void rotate(Pt &p) {
+      p.glRotated();
+    }
+
+    static void scale(Pt &p) {
+      p.glScaled();
+    }
+
+    static void begin(GLenum what) {
+      glBegin(what);
+    }
+
+    static void end() {
+      glEnd();
+    }
+};
 
 class DrawBank {
   public:
@@ -1057,8 +983,7 @@ class AsTexturePlanes : public DrawAs {
     virtual void draw(vector<Point> &points, DrawBank &d)
     {
       int l;
-      glEnable(GL_TEXTURE_2D);
-      glBindTexture(GL_TEXTURE_2D, texture->id);
+      texture->begin();
       d.begin(GL_QUADS);
 
       l = points.size();
@@ -1075,7 +1000,7 @@ class AsTexturePlanes : public DrawAs {
       }
 
       glEnd();
-      glDisable(GL_TEXTURE_2D);
+      texture->end();
     }
 };
 
@@ -1568,7 +1493,7 @@ class StrobeCloud : public ColorFilter {
 
 class Revolve : public RotateFilter {
   public:
-    Revolve(double max_speed=10) {
+    Revolve(double max_speed=(M_PI/5)) {
       this->max_speed = max_speed;
     }
 
@@ -1677,7 +1602,7 @@ class Param {
       return *this;
     }
 
-    operator double() {
+    operator double() const {
       return val;
     }
 
