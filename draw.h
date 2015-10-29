@@ -19,6 +19,21 @@ double frandom(void) {
   return (double)(random()) / INT_MAX;
 }
 
+double frandom(double _min, double _max) {
+  return _min + (_max - _min) * frandom();
+}
+
+/* vector<Moo> goo;
+ * foreach(g, goo) {
+ *   if (g->pritzical)
+ *     g->frobnicate();
+ * }
+ */
+#define foreach(I,VECTOR) \
+  for (decltype(&*VECTOR.begin()) _i=0, I=&(VECTOR)[0]; \
+       ((unsigned long int)_i) < (VECTOR).size(); \
+       (*((unsigned long int*)&_i))++,I=&(VECTOR)[(unsigned long int)_i])
+
 class Pt {
   public:
 
@@ -153,13 +168,6 @@ class Pt {
       return ma;
     }
 
-    double project(const Pt &p) const
-    {
-      double d = dot(p);
-      double sign = (d >= 0? 1. : -1.);
-      return sign * sqrt(fabs(d));
-    }
-
     Pt& operator+=(const Pt &p) {
       x += p.x;
       y += p.y;
@@ -238,6 +246,13 @@ class Pt {
       return x;
     }
 
+    bool operator==(const Pt& other) const {
+      return (x == other.x) && (y == other.y) && (z == other.z);
+    }
+
+    bool operator!=(const Pt& other) const {
+      return (x != other.x) || (y != other.y) || (z != other.z);
+    }
 
     void glVertex3d() const
     {
@@ -273,6 +288,109 @@ class Pt {
     void print() const
     {
       printf("x%5.2f y%5.2f z%5.2f\n", x, y, z);
+    }
+
+    Pt &operator=(double v)
+    {
+      x = y = z = v;
+      return *this;
+    }
+
+    Pt scaled(const Pt &factors) const
+    {
+      return Pt(x * factors.x, y * factors.y, z * factors.z);
+    }
+
+    Pt without(const Pt &axis) const
+    {
+      return (*this) - project(axis);
+    }
+
+    Pt project(const Pt &axis, bool neg_means_zero=true) const
+    {
+      double d = dot(axis);
+      if (neg_means_zero && (d < 0))
+        return Pt();
+      return axis * d;
+    }
+};
+
+struct Matrix33 {
+    double a, b, c,
+           d, e, f,
+           g, h, i;
+
+    static Matrix33 from_rot3(Pt rot3) {
+      double cx = cos(rot3.x);
+      double cy = cos(rot3.y);
+      double cz = cos(rot3.z);
+      double sx = sin(rot3.x);
+      double sy = sin(rot3.y);
+      double sz = sin(rot3.z);
+      Matrix33 mx = {
+        1, 0, 0,
+        0, cx, sx,
+        0, -sx, cx
+      };
+
+      Matrix33 my {
+        cy, 0, -sy,
+        0, 1, 0,
+        sy, 0, cy
+      };
+
+      Matrix33 mz {
+        cz, sz, 0,
+        -sz, cz, 0,
+        0, 0, 1
+      };
+
+      return my * mx * mz;
+    }
+
+    Matrix33 operator*(const Matrix33 &o) const
+    {
+      return Matrix33{
+        a*o.a + b*o.d + c*o.g, a*o.b + b*o.e + c*o.h, a*o.c + b*o.f + c*o.i,
+        d*o.a + e*o.d + f*o.g, d*o.b + e*o.e + f*o.h, d*o.c + e*o.f + f*o.i,
+        g*o.a + h*o.d + i*o.g, g*o.b + h*o.e + i*o.h, g*o.c + h*o.f + i*o.i
+      };
+    }
+
+    Pt operator*(const Pt &p) const
+    {
+      /*     a b c   x    a*x + b*y + c*z
+             d e f * y =  d*x + e*y + f*z
+             g h i   z    g*x + h*y + i*z */
+      return Pt( a*p.x + b*p.y + c*p.z,
+                 d*p.x + e*p.y + f*p.z,
+                 g*p.x + h*p.y + h*p.z);
+    }
+
+    double det() const
+    {
+      return a*e*i + b*f*g + c*d*h - g*e*c - h*f*a - i*d*b;
+    }
+
+    Matrix33 inverse() const
+    {
+      double dd = det();
+      if (fabs(dd) < 1e-6)
+        return Matrix33();
+      return Matrix33{
+        e*i - f*h, c*h - b*i, b*f - c*e,
+        f*g - d*i, a*i - c*g, c*d - a*f, 
+        d*h - e*g, b*g - a*h, a*e - b*d
+      } / dd;
+    }
+
+    Matrix33 operator/(double x) const
+    {
+      return Matrix33{
+          a/x, b/x, c/x,
+          d/x, e/x, f/x,
+          g/x, h/x, i/x
+      };
     }
 
 };
@@ -1624,6 +1742,71 @@ class Mass {
     {
       v += F * (dt / m);
     }
+
+    Pt impulse() const
+    {
+      return v * m;
+    }
 };
 
 
+/**
+adapted from http://www.euclideanspace.com/physics/dynamics/collision/threed/index.htm
+
+This function calulates the velocities after a 3D collision vaf, vbf, waf and wbf from information about the colliding bodies
+@param double e coefficient of restitution which depends on the nature of the two colliding materials
+@param double ma total mass of body a
+@param double mb total mass of body b
+@param matrix Ia inertia tensor for body a in absolute coordinates (if this is known in local body coordinates it must
+                 be converted before this is called).
+@param matrix Ib inertia tensor for body b in absolute coordinates (if this is known in local body coordinates it must
+                 be converted before this is called).
+@param vector ra position of collision point relative to centre of mass of body a in absolute coordinates (if this is
+                 known in local body coordinates it must be converted before this is called).
+@param vector rb position of collision point relative to centre of mass of body b in absolute coordinates (if this is
+                 known in local body coordinates it must be converted before this is called).
+@param vector n normal to collision point, the line along which the impulse acts.
+@param vector vai initial velocity of centre of mass on object a
+@param vector vbi initial velocity of centre of mass on object b
+@param vector wai initial angular velocity of object a
+@param vector wbi initial angular velocity of object b
+@param vector vaf final velocity of centre of mass on object a
+@param vector vbf final velocity of centre of mass on object a
+@param vector waf final angular velocity of object a
+@param vector wbf final angular velocity of object b
+*/
+void collide(double restitution,
+             double ma,
+             double mb,
+             const Matrix33 &Ia,
+             const Matrix33 &Ib,
+             const Pt &ra,
+             const Pt &rb,
+             const Pt &n,
+             const Pt &vai,
+             const Pt &vbi,
+             const Pt &wai,
+             const Pt &wbi,
+             Pt &vaf,
+             Pt &vbf,
+             Pt &waf,
+             Pt &wbf)
+{
+  Matrix33 inv_Ia = Ia.inverse();
+  Matrix33 inv_Ib = Ib.inverse();
+
+  Pt anga_a = inv_Ia * n.cross(ra);
+  Pt angv_a = anga_a.cross(ra);  // calculate the linear velocity of collision point on a due to rotation of a
+
+  Pt anga_b = inv_Ib * n.cross(rb);
+  Pt angv_b = anga_b.cross(rb);  // calculate the linear velocity of collision point on b due to rotation of b
+
+  double scalar = 1/ma + angv_a.dot(n) + 1/mb + angv_b.dot(n);
+
+  double Jmod = (restitution+1) * (vai-vbi).len() / scalar;
+  Pt J = n * Jmod;
+  vaf = vai - J * (1/ma);
+  vbf = vbi - J * (1/mb);
+  waf = wai - anga_a;
+  wbf = wbi - anga_b;
+}

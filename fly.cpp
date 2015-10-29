@@ -203,9 +203,26 @@ struct Orientation {
     return Pt(M_PI - ax, ay, - az);
   }
 
+  Matrix33 rot_matrix()
+  {
+    return Matrix33::from_rot3(rot3());
+  }
+
+  bool operator!=(const Orientation &other) const {
+    return (nose != other.nose) && (top != other.top);
+  }
+
+  bool operator==(const Orientation &other) const {
+    return !(operator!=(other));
+  }
 };
 
 class Visible {
+  private:
+    double _radius;
+    vector<Point> rotated_points;
+    Orientation rotated_ori;
+    bool shape_changed;
   public:
     vector<Point> points;
     vector<Face> faces;
@@ -213,13 +230,18 @@ class Visible {
     Pt pos;
     Orientation ori;
 
-    Visible() {
+    Visible()
+      :scale(1, 1, 1),
+       shape_changed(false),
+       _radius(0)
+    {
       scale.set(1, 1, 1);
     }
 
     Point &add_point()
     {
       points.resize(points.size() + 1);
+      shape_changed = true;
       return points.back();
     }
 
@@ -276,6 +298,40 @@ class Visible {
           break;
       }
     }
+
+    double radius()
+    {
+      if (shape_changed) {
+        shape_changed = false;
+        _radius = 0;
+        foreach(p, points) {
+          _radius = max(_radius, p->scaled(scale).len());
+        }
+      }
+      return _radius;
+    }
+
+    bool radius_overlaps(Visible &v)
+    {
+      return (pos - v.pos).len() < (radius() + v.radius());
+    }
+
+  private:
+    void update_rotated_points()
+    {
+      if (rotated_ori != ori) {
+        rotated_ori = ori;
+        Pt rot3 = rotated_ori.rot3();
+
+        rotated_points.resize(points.size());
+        foreach(p, rotated_points) {
+          *p = points[(long unsigned int)_i];
+
+          //rotated_points[_i] = p->rot_about
+        }
+
+      }
+    }
 };
 
 #define ARRAY_SIZE(X) (sizeof(X)/sizeof(*X))
@@ -320,11 +376,78 @@ void color_scheme(Visible &b, const Pt &base_rgb) {
 class Ufo : public Visible {
   public:
 
-    bool animate;
-    Pt v;
-    Pt v_ang;
+    Mass mass;
 
-    virtual void step() {};
+    /* accumulated for each step */
+    Pt a;
+
+    bool moving()
+    {
+      return mass.v.len() > 1.e-6;
+    }
+
+    virtual void step() {
+      pos += mass.v * dt;
+    };
+
+    void apply_force(Pt at, Pt f)
+    {
+      a += f / mass.m;
+    }
+
+    void step_accelerate(double dt)
+    {
+      mass.accelerate(a, dt);
+      a = 0;
+    }
+
+    void collide(Ufo &o)
+    {
+      if (!radius_overlaps(o))
+        return;
+
+      Pt dir = o.pos - pos;
+      Pt n = dir.unit();
+
+      /*
+      printf("\n");
+      Pt i1 = mass.impulse() + o.mass.impulse();
+      printf("imp\t");mass.impulse().print();
+      printf("o.imp\t");o.mass.impulse().print();
+      printf("i1\t"); i1.print();
+      printf("m %f  o.m %f\n", mass.m, o.mass.m);
+      printf("v\t");mass.v.print();
+      printf("o.v\t"); o.mass.v.print();
+      printf("n\t"); n.print();
+      printf("vdiff\t"); (o.mass.v - mass.v).print();
+      printf("vdiffp\t"); (o.mass.v - mass.v).project(n).print();
+      printf("vdiffl\t%f\n", (o.mass.v - mass.v).project(n).len());
+      */
+      Pt J = n * (2.* (mass.v - o.mass.v).project(n).len() / (1./mass.m + 1./o.mass.m));
+
+      mass.v -= J / mass.m;
+      o.mass.v += J / o.mass.m;
+      /*
+      printf("J\t"); J.print();
+      Pt i2 = mass.impulse() + o.mass.impulse();
+      printf("v\t");mass.v.print();
+      printf("o.v\t"); o.mass.v.print();
+      printf("imp\t");mass.impulse().print();
+      printf("o.imp\t");o.mass.impulse().print();
+      printf("i2\t"); i2.print();
+      printf("i1 %6.2f  i2 %6.2f\n",
+             i1.len(), i2.len());
+             */
+
+      Pt at = ((pos + n * radius()) + (o.pos - n * o.radius())) / 2;
+      /*
+      printf("pos\t");pos.print();
+      printf("at\t");at.print();
+      printf("o.pos\t");o.pos.print();
+*/
+      pos = at - n * (1.01 * radius());
+      o.pos = at + n * (1.01 * o.radius());
+    }
 };
 
 class FlyingBlock : public Ufo {
@@ -335,8 +458,6 @@ class FlyingBlock : public Ufo {
     }
 };
 
-const double engines_strength = 100;
-
 class Fly : public Ufo {
   public:
   Pt top_lag;
@@ -346,7 +467,6 @@ class Fly : public Ufo {
   Param roll_y;
   Param roll_z;
 
-  Mass mass;
   Param propulsion_forward;
   Param propulsion_break;
 
@@ -355,6 +475,7 @@ class Fly : public Ufo {
   bool do_cruise;
   Param cruise_v;
 
+  double engines_strength;
 
 	Fly() : Ufo() {
     ori.nose.set(0, 0, -1);
@@ -371,6 +492,9 @@ class Fly : public Ufo {
 
     do_cruise = true;
     cruise_v = .05;
+    mass.v.set(0, 0, -.05);
+    mass.m = 5000;
+    engines_strength = mass.m * 100;
 
     make_block(*this);
     color_scheme(*this, Pt(.2, .6, .2));
@@ -386,7 +510,7 @@ class Fly : public Ufo {
 	}
 
 
-  virtual void step(void) {
+  virtual void step() {
       roll_x.step();
       roll_y.step();
       roll_z.step();
@@ -410,7 +534,7 @@ class Fly : public Ufo {
 
       if (wings > 1.e-5) {
         Pt v_want = ori.nose * mass.v.len();
-        wings_force = (v_want - mass.v) * wings / dt;
+        wings_force = (v_want - mass.v) * mass.m * wings / dt;
       }
 
       double want_propulsion_forward = propulsion_forward;
@@ -423,15 +547,18 @@ class Fly : public Ufo {
           double diff = cruise_v - mass.v.len();
           if (diff > 1e-6) {
             /* we're slowing down below cruising speed. Hit the accelerator a bit. */
-            want_propulsion_forward = (10. * diff) / engines_strength;
+            want_propulsion_forward = (6. * mass.m * diff) / engines_strength; // get percentile
             if (want_propulsion_forward < propulsion_forward)
               want_propulsion_forward = propulsion_forward;
           }
         }
       }
 
+      // 1. is pedal to the metal
+      want_propulsion_forward = min(1., want_propulsion_forward);
+
       Pt forward_want = ori.nose * (want_propulsion_forward * engines_strength);
-      Pt break_want = mass.v * (-propulsion_break);
+      Pt break_want = mass.v * mass.m * (-propulsion_break);
 
       Pt propulsion = forward_want + break_want;
       if (propulsion.len() > engines_strength)
@@ -439,10 +566,10 @@ class Fly : public Ufo {
 
       mass.accelerate(wings_force + propulsion, dt);
 
-      pos += mass.v * dt;
+      Ufo::step();
 
       static int skip = 0;
-      if ((skip ++) > 10) {
+      if ((skip ++) > 50) {
         skip = 0;
         printf("v=%5.2f p=%5.2f g=%5.2f\n",
                mass.v.len(),
@@ -481,18 +608,36 @@ class World {
     Fly fly;
     Camera cam;
     FlyingBlock debris[10 * world_r / max_block_size];
+    int inanimate;
 
     vector<Ufo*> ufos;
 
     World() {
       for (int i = 0; i < ARRAY_SIZE(debris); i++) {
         FlyingBlock &b = debris[i];
-        b.pos = Pt::random(-world_r, world_r);
-        b.scale = Pt::random(1, max_block_size);
         b.ori.rotate(Pt::random() * 2 * M_PI);
+
+        if (i == 0) {
+          b.pos.set(0, 0, -5);
+          b.scale = 1.0;
+        }
+        else
+        if (i == 1) {
+          b.pos.set(3, 3, -5);
+          b.mass.v.set(-.7, -.7, 0);
+          b.scale = 1.001;
+        }
+        else {
+          b.pos = Pt::random(-world_r, world_r);
+          b.scale = Pt::random(1, max_block_size);
+        }
+
+        b.mass.m = b.scale.x * b.scale.y * b.scale.z;
 
         add(b);
       }
+
+
 
       add(fly);
     }
@@ -506,10 +651,31 @@ class World {
     }
 
     void step() {
-      for (int i = 0; i < ufos.size(); i++) {
-        ufos[i]->step();
+      inanimate = 0;
+      foreach(u, ufos) {
+        (*u)->step();
+        if (!(*u)->moving())
+          inanimate ++;
       }
+
+      static int skip = 0;
+      if (skip++ > 50) {
+        skip = 0;
+        if (! inanimate) {
+          printf("YOU WIN!");
+        }
+        printf("%d / %d\n", ufos.size() - inanimate, ufos.size());
+      }
+
       wrap(fly.pos + fly.ori.nose * (world_r/2), world_r);
+
+      collide();
+
+      /*
+      foreach(u, ufos) {
+        (*u)->step_accelerate(dt);
+      }
+      */
 
       Pt dir = fly.mass.v.unit();
       if (! dir.zero())
@@ -534,6 +700,15 @@ class World {
         ufos[i]->pos.wrap(center, dist);
       }
     }
+
+    void collide() {
+      for (int i = 0; i < ufos.size(); i++) {
+        for (int j = i+1; j < ufos.size(); j++) {
+          if (ufos[i]->moving() || ufos[j]->moving())
+            ufos[i]->collide(*ufos[j]);
+        }
+      }
+    }
 };
 
 
@@ -545,10 +720,29 @@ class Osd {
     bool draw_want_speed;
     FlyingBlock want_speed;
 
+    int was_inanimate;
+    double show_got_one;
+    FlyingBlock got_one;
+    FlyingBlock all;
+    FlyingBlock inanimates;
+
     Osd()
     {
       speed.pos.set(-1, -.7, -1);
       want_speed.pos.set(-1, -.7, -1.002);
+
+      all.pos.set(0, -.71, -1.004);
+      all.scale.set(.0001 + 2., .03, .001);
+
+      inanimates.pos.set(0, -.71, -1.002);
+      
+      got_one.pos.set(0, -.71, -1);
+      show_got_one = 0;
+
+      double c[][4] = {{.1, 0.7, .1, .4},};
+      all.load_colors(c, ARRAY_SIZE(c));
+      double d[][4] = {{.7, 0.1, .1, .4},};
+      inanimates.load_colors(d, ARRAY_SIZE(c));
     }
 
     void update(const World &world) {
@@ -566,12 +760,30 @@ class Osd {
       }
       else
         draw_want_speed = false;
+
+      if (show_got_one > 0) {
+        show_got_one -= dt;
+        double e[][4] = {{.5, 1, .5, min(show_got_one, 1.)}, {.4, 1, .4, min(show_got_one, 1.)}};
+        got_one.load_colors(e, ARRAY_SIZE(c));
+      };
+      if (was_inanimate != world.inanimate) {
+        printf("CHANGE %d %d\n", was_inanimate, world.inanimate);
+        show_got_one = 1.1;
+        was_inanimate = world.inanimate;
+      }
+      inanimates.scale.set(.0001 + 2. * world.inanimate / world.ufos.size(), .03, .001);
+      got_one.scale.set(.0001 + 2. * world.inanimate / world.ufos.size(), .03, .001);
     }
 
     void draw() {
       speed.draw();
       if (draw_want_speed)
         want_speed.draw();
+      all.draw();
+      inanimates.draw();
+      if (show_got_one > 0) {
+        got_one.draw();
+      }
     }
 };
 
@@ -625,6 +837,7 @@ int save_thread(void *arg) {
 World *gl_world;
 
 void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
+  double v;
   switch(axis)
   {
   default:
@@ -646,7 +859,8 @@ void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
 #if 0
     world.fly.velocity.change = ((axis_val + 1) / 2) / 200;
 #else
-    gl_world->fly.propulsion_forward = (axis_val + 1) / 2;
+    v = (axis_val + 1) / 2;
+    gl_world->fly.propulsion_forward = .2 * v;
 #endif
     break;
   case 2:
@@ -872,6 +1086,7 @@ int main(int argc, char *argv[])
   gl_world = &world;
 
   Osd osd;
+  osd.was_inanimate = world.ufos.size() - 2;
 
   printf("%d\n", (int)(frandom() * 1000));
 
