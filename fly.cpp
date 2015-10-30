@@ -1,6 +1,10 @@
 #include <stdlib.h>
 #include <time.h>
+
+#define DRAW_SPHERES 0
+#if DRAW_SPHERES
 #include <GL/glut.h>
+#endif
 
 #define Pf(V) printf(#V "=%f\n", (float)V)
 #define Pi(V) printf(#V "=%d\n", (int)V)
@@ -268,8 +272,8 @@ class Visible {
       ori.glRotated();
       scale.glScaled();
 
-#if 1
-      glutSolidSphere (.5, 20, 16);
+#if DRAW_SPHERES
+      glutSolidSphere(.5, 20, 16);
 #else
       int l;
       Draw::begin(GL_TRIANGLES);
@@ -299,9 +303,9 @@ class Visible {
     {
       load_points(points, n_points);
       for (int i = 0; i < n_faces; i++) {
-        Pt a = this->points[faces[i][1]] - this->points[faces[i][0]];
-        Pt b = this->points[faces[i][2]] - this->points[faces[i][0]];
-        add_face().load(faces[i], b.cross(a));
+        Pt a = this->points[faces[i][0]] - this->points[faces[i][1]];
+        Pt b = this->points[faces[i][1]] - this->points[faces[i][2]];
+        add_face().load(faces[i], b.cross(a).unit());
       }
     }
 
@@ -356,10 +360,10 @@ class Visible {
 
 void make_block(Visible &v) {
   static double points[][3] = {
-    {-.5, -.5, -.5},
     {-.5, -.5,  .5},
-    {-.5,  .5,  .5},
+    {-.5, -.5, -.5},
     {-.5,  .5, -.5},
+    {-.5,  .5,  .5},
     { .5, -.5, -.5},
     { .5, -.5,  .5},
     { .5,  .5,  .5},
@@ -373,11 +377,11 @@ void make_block(Visible &v) {
 
   static unsigned int faces[][3] = {
     side(0, 1, 2, 3),
-    side(0, 1, 5, 4),
-    side(1, 2, 6, 5),
+    side(1, 4, 7, 2),
     side(4, 5, 6, 7),
-    side(2, 3, 7, 6),
-    side(3, 0, 4, 7)
+    side(5, 0, 3, 6),
+    side(3, 2, 7, 6),
+    side(5, 4, 1, 0)
   };
 #undef side
 
@@ -512,8 +516,11 @@ class Fly : public Ufo {
       Point &p = points[i];
       if (p.z < 0) {
         p.x *= .1;
+        p.y = max(min(p.y, .01), -.01);
       }
-      p.y = max(min(p.y, .03), -.03);
+      else {
+        p.y = max(min(p.y, .03), -.03);
+      }
     }
 	}
 
@@ -615,7 +622,6 @@ class Light {
     GLuint id;
     bool do_wrap;
 
-
     Light()
     {
       if (lights_n >= ARRAY_SIZE(GL_LIGHT_ID_LIST)) {
@@ -630,15 +636,61 @@ class Light {
     void init(const Pt &at, bool do_wrap=false, const Pt &anchor=Pt())
     {
       this->anchor = anchor;
-      this->ofs = at;
+      this->ofs = at - anchor;
       this->do_wrap = do_wrap;
     }
 
-    void glLight()
+    void step()
     {
       Pt pos = anchor + ofs;
-      GLfloat light_position[] = {(float)pos.x, (float)pos.y, (float)pos.z, 1. };
-      glLightfv(id, GL_POSITION, light_position);
+      glLight(GL_POSITION, pos.x, pos.y, pos.z);
+    }
+
+    void glLight(GLuint do_id, float r, float g, float b)
+    {
+      GLfloat v[] = { r, g, b, 1.0 };
+      glLightfv(id, do_id, v);
+    }
+
+    void ambient(double v)
+    {
+      ambient(v, v, v);
+    }
+
+    void diffuse(double v)
+    {
+      diffuse(v, v, v);
+    }
+
+    void specular(double v)
+    {
+      specular(v, v, v);
+    }
+
+
+    void ambient(float r, float g, float b)
+    {
+      glLight(GL_AMBIENT, r, g, b);
+    }
+
+    void diffuse(float r, float g, float b)
+    {
+      glLight(GL_DIFFUSE, r, g, b);
+    }
+
+    void specular(float r, float g, float b)
+    {
+      glLight(GL_SPECULAR, r, g, b);
+    }
+
+    void atten_lin(double f)
+    {
+      glLightf(id, GL_LINEAR_ATTENUATION, f);
+    }
+
+    void atten_quadr(double f)
+    {
+      glLightf(id, GL_QUADRATIC_ATTENUATION, f);
     }
 
 };
@@ -650,8 +702,22 @@ class World {
     Pt wrap_ofs;
 
     World() {
-      Pt d = 1e99;
-      add_light().init(Pt(1e1, 1e1, 1e1));
+      {
+        Light &l = add_light();
+        l.init(Pt(0, 0, -10));
+        l.ambient(.8);
+        l.diffuse(1);
+        l.specular(1);
+        l.atten_quadr(.001);
+      }
+
+      {
+        Light &l = add_light();
+        l.init(Pt(0, 0, -10));
+        l.ambient(.0);
+        l.diffuse(.1);
+        l.specular(0);
+      }
     }
 
     void add(Ufo &u) {
@@ -673,7 +739,7 @@ class World {
 
     void draw() {
       foreach(l, lights) {
-        l->glLight();
+        l->step();
       }
       foreach(u, ufos) {
         (*u)->draw();
@@ -740,7 +806,9 @@ class Game {
 
     void draw()
     {
+      glEnable(GL_LIGHTING);
       draw_scene();
+      glDisable(GL_LIGHTING);
       draw_osd();
       glFlush();
       SDL_GL_SwapBuffers();
@@ -759,9 +827,9 @@ class MoveAllBlocks : public Game {
 
     MoveAllBlocks(World &w)
       : Game(w),
-        world_r(50),
-        max_block_size(10),
-        blocks_count(30)
+        world_r(10),
+        max_block_size(1),
+        blocks_count(50)
       {}
 
     virtual void start()
@@ -782,9 +850,21 @@ class MoveAllBlocks : public Game {
           b.mass.v.set(-.7, -.7, 0);
           b.scale = 1.001;
         }
+        else
+        if (i == 2) {
+          b.pos.set(2, 0, -10);
+          b.mass.v = 0;
+          b.scale = 1;
+        }
+        else
+        if (i == 3) {
+          b.pos.set(-2, 0, -10);
+          b.mass.v = 0;
+          b.scale = 1;
+        }
         else {
           b.pos = Pt::random(-world_r, world_r);
-          b.scale = Pt::random(1, max_block_size);
+          b.scale = Pt::random(max_block_size / 10, max_block_size);
         }
 
         b.mass.m = b.scale.x * b.scale.y * b.scale.z;
@@ -1107,8 +1187,10 @@ int main(int argc, char *argv[])
 
   const int maxpixels = 1e4;
 
+#if DRAW_SPHERES
   int _argc = 1;
    glutInit(&_argc, argv);
+#endif
 
   if ((W < 3) || (W > maxpixels) || (H < 3) || (H > maxpixels)) {
     fprintf(stderr, "width and/or height out of bounds: %dx%d\n", W, H);
@@ -1155,7 +1237,6 @@ int main(int argc, char *argv[])
   glClearColor (0.0, 0.0, 0.0, 0.0);
   glShadeModel (GL_SMOOTH);
 
-  glEnable(GL_LIGHTING);
   glColorMaterial ( GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE ) ;
   glEnable(GL_COLOR_MATERIAL);
   glEnable(GL_NORMALIZE);
