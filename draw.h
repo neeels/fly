@@ -35,6 +35,10 @@ class Pt {
       set(0,0,0);
     }
 
+    Pt(double v) {
+      set(v, v, v);
+    }
+
     Pt(double x, double y, double z) {
       set(x, y, z);
     }
@@ -314,6 +318,12 @@ class Pt {
       }
     }
 
+    void glNormal() const
+    {
+      ::glNormal3d(x, y, z);
+    }
+
+
     void glScaled() const
     {
       ::glScaled(x, y, z);
@@ -584,6 +594,13 @@ class Color {
                     );
       else
         ::glColor4f(r, g, b, alpha);
+    }
+
+    void glMaterial() {
+      GLfloat mat_specular[] = { (float)r, (float)g, (float)b, (float)a };
+      GLfloat mat_shininess[] = { .1 };
+      glMaterialfv(GL_FRONT, GL_SPECULAR, mat_specular);
+      glMaterialfv(GL_FRONT, GL_SHININESS, mat_shininess);
     }
 
     void print() {
@@ -1845,3 +1862,5 @@ void collide(double restitution,
   waf = wai - anga_a;
   wbf = wbi - anga_b;
 }
+
+// vim: expandtab shiftwidth=2 tabstop=2

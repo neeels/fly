@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <time.h>
+#include <GL/glut.h>
 
 #define Pf(V) printf(#V "=%f\n", (float)V)
 #define Pi(V) printf(#V "=%d\n", (int)V)
@@ -20,10 +21,12 @@ float want_fps = 25;
 struct Face {
   static const unsigned int N = 3;
   unsigned int point_idx[Face::N];
+  Pt n;
 
-  void load(const unsigned int idxs[Face::N])
+  void load(const unsigned int idxs[Face::N], const Pt &normal)
   {
     memcpy(point_idx, idxs, sizeof(point_idx));
+    n = normal.unit();
   }
 };
 
@@ -261,22 +264,27 @@ class Visible {
       glPushMatrix();
 
       pos.glTranslated();
+   
       ori.glRotated();
       scale.glScaled();
 
+#if 1
+      glutSolidSphere (.5, 20, 16);
+#else
       int l;
       Draw::begin(GL_TRIANGLES);
 
       l = faces.size();
       for (int i = 0; i < l; i++) {
         Face &face = faces[i];
+        face.n.glNormal();
         for (int j = 0; j < Face::N; j++) {
           Draw::color_point(points[face.point_idx[j]]);
         }
       }
 
       Draw::end();
-
+#endif
       glPopMatrix();
     }
 
@@ -286,10 +294,15 @@ class Visible {
         add_point().load(points[i]);
     }
 
-    void load_faces(const unsigned int faces[][3], int n_faces)
+    void load_faces(const double points[][3], int n_points,
+                    const unsigned int faces[][3], int n_faces)
     {
-      for (int i = 0; i < n_faces; i++)
-        add_face().load(faces[i]);
+      load_points(points, n_points);
+      for (int i = 0; i < n_faces; i++) {
+        Pt a = this->points[faces[i][1]] - this->points[faces[i][0]];
+        Pt b = this->points[faces[i][2]] - this->points[faces[i][0]];
+        add_face().load(faces[i], b.cross(a));
+      }
     }
 
     void load_colors(const double colors[][4], int n_colors, bool cycle=true)
@@ -368,8 +381,8 @@ void make_block(Visible &v) {
   };
 #undef side
 
-  v.load_points(points, ARRAY_SIZE(points));
-  v.load_faces(faces, ARRAY_SIZE(faces));
+  v.load_faces(points, ARRAY_SIZE(points),
+               faces, ARRAY_SIZE(faces));
 }
 
 void color_scheme(Visible &b, const Pt &base_rgb) {
@@ -585,14 +598,71 @@ struct Camera {
   }
 };
 
+static const int GL_LIGHT_ID_LIST[] = {
+  GL_LIGHT0,
+  GL_LIGHT1,
+  GL_LIGHT2,
+  GL_LIGHT3,
+  GL_LIGHT4,
+  GL_LIGHT5
+};
+static int lights_n = 0;
+
+class Light {
+  public:
+    Pt anchor;
+    Pt ofs;
+    GLuint id;
+    bool do_wrap;
+
+
+    Light()
+    {
+      if (lights_n >= ARRAY_SIZE(GL_LIGHT_ID_LIST)) {
+        printf("Too many lights: %d\n", lights_n + 1);
+        exit(1);
+      }
+      id = GL_LIGHT_ID_LIST[lights_n];
+      lights_n ++;
+      glEnable(id);
+    }
+
+    void init(const Pt &at, bool do_wrap=false, const Pt &anchor=Pt())
+    {
+      this->anchor = anchor;
+      this->ofs = at;
+      this->do_wrap = do_wrap;
+    }
+
+    void glLight()
+    {
+      Pt pos = anchor + ofs;
+      GLfloat light_position[] = {(float)pos.x, (float)pos.y, (float)pos.z, 1. };
+      glLightfv(id, GL_POSITION, light_position);
+    }
+
+};
+
 class World {
   public:
+    vector<Light> lights;
     vector<Ufo*> ufos;
     Pt wrap_ofs;
+
+    World() {
+      Pt d = 1e99;
+      add_light().init(Pt(1e1, 1e1, 1e1));
+    }
 
     void add(Ufo &u) {
       ufos.resize(ufos.size() + 1);
       ufos.back() = &u;
+    }
+
+    Light &add_light()
+    {
+      lights.resize(lights.size() + 1);
+      return lights.back();
     }
 
     void step() {
@@ -602,15 +672,24 @@ class World {
     }
 
     void draw() {
-      for (int i = 0; i < ufos.size(); i++) {
-        ufos[i]->draw();
+      foreach(l, lights) {
+        l->glLight();
+      }
+      foreach(u, ufos) {
+        (*u)->draw();
       }
     }
 
     void wrap(const Pt &center, double dist) {
       wrap_ofs += center;
-      for (int i = 0; i < ufos.size(); i++) {
-        ufos[i]->pos.wrap_cube(center, dist);
+      foreach(l, lights) {
+        if (l->do_wrap)
+          l->anchor.wrap_cube(center, dist);
+        else
+          l->anchor -= center;
+      }
+      foreach(u, ufos) {
+        (*u)->pos.wrap_cube(center, dist);
       }
     }
 
@@ -651,10 +730,11 @@ class Game {
     {
       glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
 
-      glMatrixMode( GL_MODELVIEW );
-      glLoadIdentity( );
 
+      glLoadIdentity( );
+      
       cam.gluLookAt();
+
       world.draw();
     }
 
@@ -1027,6 +1107,9 @@ int main(int argc, char *argv[])
 
   const int maxpixels = 1e4;
 
+  int _argc = 1;
+   glutInit(&_argc, argv);
+
   if ((W < 3) || (W > maxpixels) || (H < 3) || (H > maxpixels)) {
     fprintf(stderr, "width and/or height out of bounds: %dx%d\n", W, H);
     exit(1);
@@ -1061,7 +1144,7 @@ int main(int argc, char *argv[])
   }
 
   atexit(SDL_Quit);
-  SDL_WM_SetCaption("SCOP3", NULL);
+  SDL_WM_SetCaption("fly", NULL);
   screen = SDL_SetVideoMode(W,H, 32, SDL_OPENGL | SDL_FULLSCREEN);
   SDL_ShowCursor(SDL_DISABLE);
 
@@ -1069,9 +1152,18 @@ int main(int argc, char *argv[])
   glLoadIdentity();
   gluPerspective(80, (double)W/H, .5, 1000);
 
+  glClearColor (0.0, 0.0, 0.0, 0.0);
+  glShadeModel (GL_SMOOTH);
+
+  glEnable(GL_LIGHTING);
+  glColorMaterial ( GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE ) ;
+  glEnable(GL_COLOR_MATERIAL);
+  glEnable(GL_NORMALIZE);
+
   glEnable(GL_DEPTH_TEST);
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  glMatrixMode( GL_MODELVIEW );
 
 
   printf("seed %d\n", (int)ip.random_seed);
