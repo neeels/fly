@@ -14,6 +14,7 @@ using namespace std;
 
 #include "palettes.h"
 #include "textures.h"
+#include "foreach.h"
 
 double frandom(void) {
   return (double)(random()) / INT_MAX;
@@ -22,17 +23,6 @@ double frandom(void) {
 double frandom(double _min, double _max) {
   return _min + (_max - _min) * frandom();
 }
-
-/* vector<Moo> goo;
- * foreach(g, goo) {
- *   if (g->pritzical)
- *     g->frobnicate();
- * }
- */
-#define foreach(I,VECTOR) \
-  for (decltype(&*VECTOR.begin()) _i=0, I=&(VECTOR)[0]; \
-       ((unsigned long int)_i) < (VECTOR).size(); \
-       (*((unsigned long int*)&_i))++,I=&(VECTOR)[(unsigned long int)_i])
 
 class Pt {
   public:
@@ -125,7 +115,25 @@ class Pt {
       return *this;
     }
 
-    int wrap(const Pt &center, double dist) {
+    static bool wrap_coord(double &x, double c, double dist) {
+      bool changed = false;
+      double d = x - c;
+      if (fabs(d) > dist) {
+        d -= dist * 2. * (d>0? 1. : -1.) * ((int)(fabs(d)/(dist*2)) + 1);
+        changed = true;
+      }
+      x = d;
+      return changed;
+    }
+
+    int wrap_cube(const Pt &center, double dist) {
+      return
+        (wrap_coord(x, center.x, dist)
+         || wrap_coord(y, center.y, dist)
+         || wrap_coord(z, center.z, dist)) ? 1 : 0;
+    }
+
+    int wrap_sphere(const Pt &center, double dist) {
       Pt d = (center - (*this));
       if (d.len() > dist) {
         *this += d.unit() * (dist*2);

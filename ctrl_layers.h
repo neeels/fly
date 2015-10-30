@@ -2,8 +2,12 @@
 #include <vector>
 using namespace std;
 
+#include "foreach.h"
+
 class ControllerState {
   public:
+    void *data;
+
     int selected_layer;
     bool clamp_button_held;
 
@@ -20,11 +24,11 @@ void on_joy_button(ControllerState &ctrl, int button, bool down);
 
 vector<ControllerState> controllers;
 
-void controller_state_init(int n_joysticks) {
-  ControllerState ctrlr_state;
-
-  while (controllers.size() < n_joysticks)
-    controllers.push_back(ctrlr_state);
+void controller_state_init(int n_joysticks, void *data=NULL) {
+  controllers.resize(n_joysticks);
+  foreach(c, controllers) {
+    c->data = data;
+  }
 }
 
 void handle_joystick_events(SDL_Event &event) {

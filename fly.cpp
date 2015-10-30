@@ -4,7 +4,6 @@
 #define Pf(V) printf(#V "=%f\n", (float)V)
 #define Pi(V) printf(#V "=%d\n", (int)V)
 
-#include "ctrl_layers.h"
 #include "draw.h"
 
 static AsQuads as_quads;
@@ -378,9 +377,6 @@ class Ufo : public Visible {
 
     Mass mass;
 
-    /* accumulated for each step */
-    Pt a;
-
     bool moving()
     {
       return mass.v.len() > 1.e-6;
@@ -389,17 +385,6 @@ class Ufo : public Visible {
     virtual void step() {
       pos += mass.v * dt;
     };
-
-    void apply_force(Pt at, Pt f)
-    {
-      a += f / mass.m;
-    }
-
-    void step_accelerate(double dt)
-    {
-      mass.accelerate(a, dt);
-      a = 0;
-    }
 
     void collide(Ufo &o)
     {
@@ -567,16 +552,6 @@ class Fly : public Ufo {
       mass.accelerate(wings_force + propulsion, dt);
 
       Ufo::step();
-
-      static int skip = 0;
-      if ((skip ++) > 50) {
-        skip = 0;
-        printf("v=%5.2f p=%5.2f g=%5.2f\n",
-               mass.v.len(),
-               propulsion.len(),
-               wings_force.len()
-              );
-      }
   }
 
 };
@@ -600,19 +575,101 @@ struct Camera {
   }
 };
 
-const int world_r = 1000;
-const int max_block_size = 30;
-
 class World {
   public:
-    Fly fly;
+    vector<Ufo*> ufos;
+    Pt wrap_ofs;
+
+    void add(Ufo &u) {
+      ufos.resize(ufos.size() + 1);
+      ufos.back() = &u;
+    }
+
+    void step() {
+      foreach(u, ufos) {
+        (*u)->step();
+      }
+    }
+
+    void draw() {
+      for (int i = 0; i < ufos.size(); i++) {
+        ufos[i]->draw();
+      }
+    }
+
+    void wrap(const Pt &center, double dist) {
+      wrap_ofs += center;
+      for (int i = 0; i < ufos.size(); i++) {
+        ufos[i]->pos.wrap_cube(center, dist);
+      }
+    }
+
+    void collide() {
+      for (int i = 0; i < ufos.size(); i++) {
+        for (int j = i+1; j < ufos.size(); j++) {
+          if (ufos[i]->moving() || ufos[j]->moving())
+            ufos[i]->collide(*ufos[j]);
+        }
+      }
+    }
+};
+
+class Game {
+  public:
+    World &world;
     Camera cam;
+    bool done = false;
+
+    Game (World &w) :world(w), done(false)
+    {
+    }
+
+    virtual void start() = 0;
+    virtual void step() = 0;
+    virtual void draw_osd() {};
+
+    void run() {
+      world.step();
+      step();
+      draw();
+    }
+
+    virtual void on_joy_axis(int axis, double axis_val) {};
+    virtual void on_joy_button(int button, bool down) {};
+
+    void draw_scene()
+    {
+      glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
+
+      glMatrixMode( GL_MODELVIEW );
+      glLoadIdentity( );
+
+      cam.gluLookAt();
+      world.draw();
+    }
+
+    void draw()
+    {
+      draw_scene();
+      draw_osd();
+      glFlush();
+      SDL_GL_SwapBuffers();
+    }
+};
+
+class TouchAllBlocks : public Game {
+  public:
+    static const int world_r = 1000;
+    static const int max_block_size = 30;
+
+    Fly fly;
     FlyingBlock debris[10 * world_r / max_block_size];
     int inanimate;
 
-    vector<Ufo*> ufos;
+    TouchAllBlocks(World &w) : Game(w) {}
 
-    World() {
+    virtual void start()
+    {
       for (int i = 0; i < ARRAY_SIZE(debris); i++) {
         FlyingBlock &b = debris[i];
         b.ori.rotate(Pt::random() * 2 * M_PI);
@@ -634,48 +691,25 @@ class World {
 
         b.mass.m = b.scale.x * b.scale.y * b.scale.z;
 
-        add(b);
+        world.add(b);
       }
 
+      world.add(fly);
 
-
-      add(fly);
+      osd.init(*this);
     }
 
-    void add(Ufo &u) {
-      ufos.resize(ufos.size() + 1);
-      ufos.back() = &u;
-    }
-
-    void load() {
-    }
-
-    void step() {
+    virtual void step()
+    {
       inanimate = 0;
-      foreach(u, ufos) {
-        (*u)->step();
+      foreach(u, world.ufos) {
         if (!(*u)->moving())
           inanimate ++;
       }
 
-      static int skip = 0;
-      if (skip++ > 50) {
-        skip = 0;
-        if (! inanimate) {
-          printf("YOU WIN!");
-        }
-        printf("%d / %d\n", ufos.size() - inanimate, ufos.size());
-      }
+      world.collide();
 
-      wrap(fly.pos + fly.ori.nose * (world_r/2), world_r);
-
-      collide();
-
-      /*
-      foreach(u, ufos) {
-        (*u)->step_accelerate(dt);
-      }
-      */
+      world.wrap(fly.pos + fly.ori.nose * (world_r/2), world_r);
 
       Pt dir = fly.mass.v.unit();
       if (! dir.zero())
@@ -686,127 +720,176 @@ class World {
       cam.look_at(fly.pos + fly.top_lag,
                   dir.unit() * (-3),
                   fly.top_lag);
-    }
 
+      osd.update(*this);
 
-    void draw() {
-      for (int i = 0; i < ufos.size(); i++) {
-        ufos[i]->draw();
+      static int skip = 0;
+      if ((skip ++) > 20) {
+        skip = 0;
+        printf("v=%5.2f p=",
+               fly.mass.v.len()
+              );
+        fly.pos.print();
+        (world.wrap_ofs + fly.pos).print();
       }
     }
 
-    void wrap(const Pt &center, double dist) {
-      for (int i = 0; i < ufos.size(); i++) {
-        ufos[i]->pos.wrap(center, dist);
-      }
+    virtual void draw_osd()
+    {
+      osd.draw();
     }
 
-    void collide() {
-      for (int i = 0; i < ufos.size(); i++) {
-        for (int j = i+1; j < ufos.size(); j++) {
-          if (ufos[i]->moving() || ufos[j]->moving())
-            ufos[i]->collide(*ufos[j]);
+    struct {
+      FlyingBlock speed;
+      bool draw_want_speed;
+      FlyingBlock want_speed;
+
+      int was_inanimate;
+      double show_got_one;
+      FlyingBlock got_one;
+      FlyingBlock all;
+      FlyingBlock inanimates;
+
+      void init(const TouchAllBlocks &g)
+      {
+        speed.pos.set(0, -.68, -1);
+        want_speed.pos = speed.pos - Pt(0, 0, .002);
+
+        all.pos.set(0, -.71, -1.004);
+        all.scale.set(.0001 + 2., .03, .001);
+
+        inanimates.pos.set(0, -.71, -1.002);
+        
+        got_one.pos.set(0, -.71, -1);
+        show_got_one = 0;
+
+        double c[][4] = {{.1, 0.7, .1, .4},};
+        all.load_colors(c, ARRAY_SIZE(c));
+        double d[][4] = {{.7, 0.1, .1, .4},};
+        inanimates.load_colors(d, ARRAY_SIZE(c));
+
+        was_inanimate = g.world.ufos.size() - 2;
+      }
+
+      void update(const TouchAllBlocks &g) {
+        double v = sqrt(g.fly.mass.v.len()) / 10;
+        speed.scale.set(.001 + v/10, .02, .001);
+        double c[][4] = {{1, min(.8*v, 1.), .3, .7}, {.95, min(.8*v * 1.1, 1.), .28, .7}};
+        speed.load_colors(c, ARRAY_SIZE(c));
+
+        if (g.fly.do_cruise) {
+          v = sqrt(g.fly.cruise_v) / 10;
+          want_speed.scale.set(.001 + v/10, .02, .001);
+          double d[][4] = {{1, min(v, 1.), .0, 1}, {.95, min(v * 1.1, 1.), .0, 1}};
+          want_speed.load_colors(d, ARRAY_SIZE(d));
+          draw_want_speed = true;
+        }
+        else
+          draw_want_speed = false;
+
+        if (show_got_one > 0) {
+          show_got_one -= dt;
+          double e[][4] = {{.5, 1, .5, min(show_got_one, 1.)}, {.4, 1, .4, min(show_got_one, 1.)}};
+          got_one.load_colors(e, ARRAY_SIZE(c));
+        };
+        if (was_inanimate != g.inanimate) {
+          if (! g.inanimate) 
+            printf("YOU WIN!");
+          else
+            printf("got %d of %d\n", g.inanimate, g.world.ufos.size());
+          show_got_one = 1.1;
+          was_inanimate = g.inanimate;
+        }
+        inanimates.scale.set(.0001 + 2. * g.inanimate / g.world.ufos.size(), .03, .001);
+        got_one.scale.set(.0001 + 2. * g.inanimate / g.world.ufos.size(), .03, .001);
+      }
+
+      void draw() {
+        glLoadIdentity();
+
+        speed.draw();
+        if (draw_want_speed)
+          want_speed.draw();
+        all.draw();
+        inanimates.draw();
+        if (show_got_one > 0) {
+          got_one.draw();
         }
       }
-    }
-};
+    } osd;
 
 
-class Osd {
-  public:
-    DrawBank bank;
-
-    FlyingBlock speed;
-    bool draw_want_speed;
-    FlyingBlock want_speed;
-
-    int was_inanimate;
-    double show_got_one;
-    FlyingBlock got_one;
-    FlyingBlock all;
-    FlyingBlock inanimates;
-
-    Osd()
+    virtual void on_joy_axis(int axis, double axis_val)
     {
-      speed.pos.set(-1, -.7, -1);
-      want_speed.pos.set(-1, -.7, -1.002);
+      double v;
 
-      all.pos.set(0, -.71, -1.004);
-      all.scale.set(.0001 + 2., .03, .001);
+      switch(axis)
+      {
+      default:
+        printf("%d %f\n", axis, (float)axis_val);
+        break;
 
-      inanimates.pos.set(0, -.71, -1.002);
-      
-      got_one.pos.set(0, -.71, -1);
-      show_got_one = 0;
+      case 3:
+        fly.roll_y = -(axis_val*axis_val*axis_val) / 10;
+        break;
 
-      double c[][4] = {{.1, 0.7, .1, .4},};
-      all.load_colors(c, ARRAY_SIZE(c));
-      double d[][4] = {{.7, 0.1, .1, .4},};
-      inanimates.load_colors(d, ARRAY_SIZE(c));
+      case 1:
+      case 4:
+        fly.roll_x = (axis_val*axis_val*axis_val) / 10;
+        break;
+
+      case 0:
+        fly.roll_z = (axis_val*axis_val*axis_val) / 10;
+        break;
+
+      case 5:
+        // analog trigger ... -1 == not pressed, 0 = half, 1 = full
+        v = (axis_val + 1) / 2;
+        fly.propulsion_forward = .2 * v;
+        break;
+      case 2:
+        // analog trigger ... -1 == not pressed, 0 = half, 1 = full
+        fly.propulsion_break = (axis_val + 1) / 2;
+        break;
+      }
     }
 
-    void update(const World &world) {
-      double v = sqrt(world.fly.mass.v.len()) / 10;
-      speed.scale.set(.001 + v/10, .02, .001);
-      double c[][4] = {{1, min(.8*v, 1.), .3, .7}, {.95, min(.8*v * 1.1, 1.), .28, .7}};
-      speed.load_colors(c, ARRAY_SIZE(c));
+    void on_joy_button(int button, bool down)
+    {
+      switch (button) {
+      case 3:
+        if (! down) {
+          if (fly.wings < 1.e-5) {
+            fly.wings = .1;
+            fly.do_cruise = true;
+          }
+          else
+          if (fly.wings < .9) {
+            fly.wings = 1;
+            fly.do_cruise = true;
+          }
+          else {
+            fly.wings = 0;
+            fly.do_cruise = false;
+          }
+        }
+        break;
 
-      if (world.fly.do_cruise) {
-        v = sqrt(world.fly.cruise_v) / 10;
-        want_speed.scale.set(.001 + v/10, .02, .001);
-        double d[][4] = {{1, min(v, 1.), .0, 1}, {.95, min(v * 1.1, 1.), .0, 1}};
-        want_speed.load_colors(d, ARRAY_SIZE(d));
-        draw_want_speed = true;
-      }
-      else
-        draw_want_speed = false;
+      case 0:
+        fly.propulsion_forward = down? 1 : 0;
+        break;
 
-      if (show_got_one > 0) {
-        show_got_one -= dt;
-        double e[][4] = {{.5, 1, .5, min(show_got_one, 1.)}, {.4, 1, .4, min(show_got_one, 1.)}};
-        got_one.load_colors(e, ARRAY_SIZE(c));
-      };
-      if (was_inanimate != world.inanimate) {
-        printf("CHANGE %d %d\n", was_inanimate, world.inanimate);
-        show_got_one = 1.1;
-        was_inanimate = world.inanimate;
-      }
-      inanimates.scale.set(.0001 + 2. * world.inanimate / world.ufos.size(), .03, .001);
-      got_one.scale.set(.0001 + 2. * world.inanimate / world.ufos.size(), .03, .001);
-    }
+      case 1:
+        fly.propulsion_break = down? 1 : 0;
+        break;
 
-    void draw() {
-      speed.draw();
-      if (draw_want_speed)
-        want_speed.draw();
-      all.draw();
-      inanimates.draw();
-      if (show_got_one > 0) {
-        got_one.draw();
+      default:
+        printf("button %d\n", button);
+        break;
       }
     }
 };
 
-void draw_scene(World &world, Osd &osd)
-{
-  glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
-
-  glMatrixMode( GL_MODELVIEW );
-  glLoadIdentity( );
-
-  world.cam.gluLookAt();
-  world.draw();
-
-  glLoadIdentity( );
-  osd.draw();
-  glFlush();
-  SDL_GL_SwapBuffers();
-}
-
-
-FILE *out_stream = NULL;
-FILE *out_params = NULL;
-FILE *in_params = NULL;
 
 char *audio_path = NULL;
 
@@ -814,102 +897,6 @@ int W = 1920;
 int H = 900;//1200;
 
 SDL_Surface *screen = NULL;
-
-SDL_sem *please_save;
-SDL_sem *saving_done;
-
-int save_thread(void *arg) {
-
-  for (;;) {
-    SDL_SemWait(please_save);
-    if (! running)
-      break;
-
-    if (out_stream) {
-      fwrite(screen->pixels, sizeof(Uint32), W * H, out_stream);
-    }
-    SDL_SemPost(saving_done);
-  }
-
-  return 0;
-}
-
-World *gl_world;
-
-void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
-  double v;
-  switch(axis)
-  {
-  default:
-    printf("%d %f\n", axis, (float)axis_val);
-    break;
-  case 3:
-    gl_world->fly.roll_y = -(axis_val*axis_val*axis_val) / 10;
-    break;
-  case 1:
-  case 4:
-    gl_world->fly.roll_x = (axis_val*axis_val*axis_val) / 10;
-    break;
-  case 0:
-    gl_world->fly.roll_z = (axis_val*axis_val*axis_val) / 10;
-    break;
-  case 5:
-    // analog trigger ... -1 == not pressed, 0 = half, 1 = full
-    // accel
-#if 0
-    world.fly.velocity.change = ((axis_val + 1) / 2) / 200;
-#else
-    v = (axis_val + 1) / 2;
-    gl_world->fly.propulsion_forward = .2 * v;
-#endif
-    break;
-  case 2:
-    // analog trigger ... -1 == not pressed, 0 = half, 1 = full
-    // break
-#if 0
-    world.fly.velocity.change = -((axis_val + 1) / 2) / 200;
-#else
-    gl_world->fly.propulsion_break = (axis_val + 1) / 2;
-#endif
-    break;
-  }
-}
-
-void on_joy_button(ControllerState &ctrl, int button, bool down) {
-
-  switch (button) {
-  case 3:
-    if (! down) {
-      if (gl_world->fly.wings < 1.e-5) {
-        gl_world->fly.wings = .1;
-        gl_world->fly.do_cruise = true;
-      }
-      else
-      if (gl_world->fly.wings < .9) {
-        gl_world->fly.wings = 1;
-        gl_world->fly.do_cruise = true;
-      }
-      else {
-        gl_world->fly.wings = 0;
-        gl_world->fly.do_cruise = false;
-      }
-    }
-    break;
-
-  case 0:
-    gl_world->fly.propulsion_forward = down? 1 : 0;
-    break;
-
-  case 1:
-    gl_world->fly.propulsion_break = down? 1 : 0;
-    break;
-
-  default:
-    printf("button %d\n", button);
-    break;
-  }
-}
-
 
 
 typedef struct {
@@ -926,14 +913,10 @@ int main(int argc, char *argv[])
 
   int c;
 
-  char *out_stream_path = NULL;
-  char *out_params_path = NULL;
-  char *in_params_path = NULL;
-
   ip.random_seed = time(NULL);
 
   while (1) {
-    c = getopt(argc, argv, "hf:g:r:p:i:o:O:");
+    c = getopt(argc, argv, "hf:g:r:");
     if (c == -1)
       break;
    
@@ -966,22 +949,6 @@ int main(int argc, char *argv[])
         ip.random_seed = atoi(optarg);
         break;
 
-      case 'O':
-        out_stream_path = optarg;
-        break;
-
-      case 'o':
-        out_params_path = optarg;
-        break;
-
-      case 'i':
-        in_params_path = optarg;
-        break;
-
-      case 'p':
-        audio_path = optarg;
-        break;
-
       case '?':
         error = true;
       case 'h':
@@ -1011,14 +978,6 @@ int main(int argc, char *argv[])
 "           may slew if your system cannot calculate fast enough.\n"
 "           If zero, run as fast as possible. Default is %.1f.\n"
 "  -r seed  Supply a random seed to start off with.\n"
-"  -O file  Write raw video data to file (grows large quickly). Can be\n"
-"           converted to a video file using e.g. ffmpeg.\n"
-"  -o file  Write live control parameters to file for later playback, see -i.\n"
-"  -i file  Play back previous control parameters (possibly in a different\n"
-"           resolution and streaming video to file...)\n"
-"  -p file  Play back audio file in sync with actual framerate.\n"
-"           The file format should match your sound card output format\n"
-"           exactly.\n"
 , W, H, want_fps
 );
     if (error)
@@ -1038,10 +997,6 @@ int main(int argc, char *argv[])
   SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_JOYSTICK);
 
   const int n_joysticks = SDL_NumJoysticks();
-  controller_state_init(n_joysticks);
-
-
-  
   SDL_Joystick **joysticks = NULL;
 
   if (n_joysticks) {
@@ -1072,7 +1027,7 @@ int main(int argc, char *argv[])
 
   glMatrixMode( GL_PROJECTION );
   glLoadIdentity();
-  gluPerspective(80,(double)W/H,.5,world_r);
+  gluPerspective(80, (double)W/H, .5, 1000);
 
   glEnable(GL_DEPTH_TEST);
   glEnable(GL_BLEND);
@@ -1083,51 +1038,22 @@ int main(int argc, char *argv[])
   srandom(ip.random_seed);
 
   World world;
-  gl_world = &world;
 
-  Osd osd;
-  osd.was_inanimate = world.ufos.size() - 2;
+  TouchAllBlocks game(world);
 
-  printf("%d\n", (int)(frandom() * 1000));
-
-  world.load();
-
-  draw_scene(world, osd);
+  game.start();
+  game.draw();
 
   Uint32 last_time = SDL_GetTicks();
   Uint32 current_time,elapsed_time;
   Uint32 start_time;
 
-  if (out_stream_path) {
-    if (access(out_stream_path, F_OK) == 0) {
-      fprintf(stderr, "file exists, will not overwrite: %s\n", out_stream_path);
-      exit(1);
-    }
-    out_stream = fopen(out_stream_path, "w");
-  }
-
-  please_save = SDL_CreateSemaphore(0);
-  saving_done = SDL_CreateSemaphore(1);
-
-  SDL_Thread *save_thread_token = NULL;
-  //if (out_stream)
-  //  SDL_CreateThread(save_thread, NULL);
-
   float want_frame_period = (want_fps > .1? 1000. / want_fps : 0);
   float last_ticks = (float)SDL_GetTicks() - want_frame_period;
 
-  char *pixelbuf = NULL;
-  if (out_stream) {
-    pixelbuf = (char*)malloc(W * H * 4); // 4 = RGBA
-  }
-
   while (running)
   {
-
-    world.step();
-    osd.update(world);
-
-    draw_scene(world, osd);
+    game.run();
     frames_rendered ++;
 
     {
@@ -1144,43 +1070,52 @@ int main(int argc, char *argv[])
       dt = 1.e-3 * elapsed;
     }
 
-    if (out_stream) {
-      glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, pixelbuf);
-      fwrite(pixelbuf, sizeof(Uint32), W * H, out_stream);
-    }
-
     while (running) {
       SDL_Event event;
       while (running && SDL_PollEvent(&event)) 
       {
-
         switch(event.type)
         {
-          default:
-            handle_joystick_events(event);
-            break;
 
-          case SDL_QUIT:
-            running = false;
-            break;
+        case SDL_JOYAXISMOTION:
+          game.on_joy_axis(event.jaxis.axis,
+                           ((double)event.jaxis.value) / 32768.);
+          break;
 
-          case SDL_KEYDOWN:
-            {
-              int c = event.key.keysym.sym;
 
-              switch(c) {
-                case SDLK_ESCAPE:
-                  printf("Escape key. Stop.\n");
-                  running = false;
-                  break;
+        case SDL_JOYBUTTONDOWN:
+        case SDL_JOYBUTTONUP:
+          game.on_joy_button(event.jbutton.button,
+                             event.type == SDL_JOYBUTTONDOWN);
+          break;
 
-                  case 'f':
-                  case 13:
-                    SDL_WM_ToggleFullScreen(screen);
-                    break;
-              }
+        case SDL_JOYBALLMOTION:  /* Handle Joyball Motion */
+          printf("%2d: ball %d += %d, %d\n",
+                 event.jball.which, event.jball.ball,
+                 event.jball.xrel, event.jball.yrel);
+          break;
+
+        case SDL_QUIT:
+          running = false;
+          break;
+
+        case SDL_KEYDOWN:
+          {
+            int c = event.key.keysym.sym;
+
+            switch(c) {
+            case SDLK_ESCAPE:
+              printf("Escape key. Stop.\n");
+              running = false;
+              break;
+
+            case 'f':
+            case 13:
+              SDL_WM_ToggleFullScreen(screen);
+              break;
             }
-            break;
+          }
+          break;
         }
       } // while sdl poll event
 
@@ -1201,17 +1136,6 @@ int main(int argc, char *argv[])
 
   printf("\n");
   printf("%d frames rendered\n", frames_rendered);
-  if (out_stream) {
-    fclose(out_stream);
-    out_stream = NULL;
-
-    printf("suggestion:\n"
-        "ffmpeg -vcodec rawvideo -f rawvideo -pix_fmt rgb32 -s %dx%d -i %s ",
-        W, H, out_stream_path);
-    if (audio_path)
-      printf("-i %s -acodec ac3 ", audio_path);
-    printf("-vcodec mpeg4 -q 1 %s.%d.mp4\n", out_stream_path, H);
-  }
 
   return 0;
 }
