@@ -1,13 +1,15 @@
 #pragma once
 
-/* vector<Moo> goo;
+/*  vector<Moo> goo;
+ * or:
+ *  list<Moo> goo;
  * foreach(g, goo) {
  *   if (g->pritzical)
  *     g->frobnicate();
  * }
  */
-#define foreach(I,VECTOR) \
-  for (decltype(&*VECTOR.begin()) _i=0, I=&(VECTOR)[0]; \
-       ((unsigned long int)_i) < (VECTOR).size(); \
-       (*((unsigned long int*)&_i))++,I=&(VECTOR)[(unsigned long int)_i])
+#define foreach(I,LIST) \
+  for (decltype(LIST.begin()) I=LIST.begin(); \
+       I != (LIST).end(); \
+       ++I)
 

@@ -55,6 +55,12 @@ class Pt {
       z = coords[2];
     }
 
+    static Pt randoml(double min_len=0, double max_len=1)
+    {
+      Pt r = random();
+      return r.unit(Pt(1, 0, 0)) * (min_len + (max_len - min_len) * frandom());
+    }
+
     static Pt random(double min_c=-1, double max_c=1)
     {
       return Pt(min_c + (max_c - min_c) * frandom(),
@@ -70,10 +76,10 @@ class Pt {
       return sqrt(x*x + y*y + z*z);
     }
 
-    Pt unit() const {
+    Pt unit(const Pt &if_zero=Pt()) const {
       double l = len();
       if (l < 1.e-6)
-        return Pt();
+        return if_zero;
       return (*this) / l;
     }
 
