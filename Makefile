@@ -9,7 +9,7 @@ scop3: scop3.cpp palettes.h palettes.o ctrl_layers.h
 t: t.cpp palettes.h palettes.o ctrl_layers.h textures.o font.h draw.h foreach.h
 	g++ $F -o t t.cpp palettes.o textures.o -lGL -lGLU -lSDL -lSDL_image -lm
   
-fly: fly.cpp palettes.h palettes.o ctrl_layers.h textures.o font.h draw.h foreach.h
+fly: fly.cpp palettes.h palettes.o ctrl_layers.h textures.o font.h draw.h foreach.h audio.h
 	g++ $F -g -o fly fly.cpp palettes.o textures.o -lGL -lGLU -lglut -lSDL -lSDL_image -lm 
   
 palettes.o: palettes.h palettes.c

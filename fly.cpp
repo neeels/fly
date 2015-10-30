@@ -10,6 +10,7 @@
 #define Pi(V) printf(#V "=%d\n", (int)V)
 
 #include "draw.h"
+#include "audio.h"
 
 static AsQuads as_quads;
 static AsLines as_lines;
