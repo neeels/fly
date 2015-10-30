@@ -51,11 +51,11 @@ class Pt {
       z = coords[2];
     }
 
-    static Pt random(double min_l=-1, double max_l=1)
+    static Pt random(double min_c=-1, double max_c=1)
     {
-      return Pt(min_l + (max_l - min_l) * frandom(),
-                min_l + (max_l - min_l) * frandom(),
-                min_l + (max_l - min_l) * frandom());
+      return Pt(min_c + (max_c - min_c) * frandom(),
+                min_c + (max_c - min_c) * frandom(),
+                min_c + (max_c - min_c) * frandom());
     }
 
     bool zero() const {
@@ -74,6 +74,15 @@ class Pt {
     }
 
     void rot_about(const Pt &axis, double rad) {
+#if 1
+      Pt u = axis.unit();
+      double cos_rad = cos(rad);
+      double sin_rad = sin(rad);
+      *this =
+        u * (dot(u) * (1. - cos_rad))
+        + (*this)*cos_rad
+        + u.cross(*this) * sin_rad;
+#else
       double xx, yy, zz;
       double l = axis.len();
       double u = axis.x / l;
@@ -88,7 +97,24 @@ class Pt {
       x = xx;
       y = yy;
       z = zz;
+#endif
     }
+
+    /* Euler vector: rotate about given vector by the length of the vector in
+     * radians. */
+    void rot_e(const Pt &e) {
+      double rad = e.len();
+      if (fabs(rad) < 1e-6)
+        return;
+      Pt u = e / rad;
+      double cos_rad = cos(rad);
+      double sin_rad = sin(rad);
+      *this =
+        u * (dot(u) * (1. - cos_rad))
+        + (*this)*cos_rad
+        + u.cross(*this) * sin_rad;
+    }
+
 
     void scale3(Pt &p) {
       x *= p.x;
@@ -1741,6 +1767,7 @@ class Mass {
   public:
     double m;
     Pt v;
+    Pt v_ang;
 
     Mass() 
       :m(1), v(0, 0, 0)

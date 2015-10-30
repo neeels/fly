@@ -55,6 +55,12 @@ struct Orientation {
     rotate(r3.x, r3.y, r3.z);
   }
 
+  void rotate_e(Pt e)
+  {
+    nose.rot_e(e);
+    top.rot_e(e);
+  }
+
   void glRotated() const {
     rot3().glRotated();
   }
@@ -202,7 +208,7 @@ struct Orientation {
     return Pt(M_PI - ax, ay, - az);
   }
 
-  Matrix33 rot_matrix()
+  Matrix33 rot_matrix() const
   {
     return Matrix33::from_rot3(rot3());
   }
@@ -384,6 +390,7 @@ class Ufo : public Visible {
 
     virtual void step() {
       pos += mass.v * dt;
+      ori.rotate_e(mass.v_ang * dt);
     };
 
     void collide(Ufo &o)
@@ -412,6 +419,9 @@ class Ufo : public Visible {
 
       mass.v -= J / mass.m;
       o.mass.v += J / o.mass.m;
+
+      mass.v *= .59;
+      o.mass.v *= .59;
       /*
       printf("J\t"); J.print();
       Pt i2 = mass.impulse() + o.mass.impulse();
@@ -490,7 +500,7 @@ class Fly : public Ufo {
       if (p.z < 0) {
         p.x *= .1;
       }
-      p.y = max(min(p.y, .1), -.1);
+      p.y = max(min(p.y, .03), -.03);
     }
 	}
 
@@ -657,22 +667,30 @@ class Game {
     }
 };
 
-class TouchAllBlocks : public Game {
+class MoveAllBlocks : public Game {
   public:
-    static const int world_r = 1000;
-    static const int max_block_size = 30;
+    double world_r;
+    double max_block_size;
+    double blocks_count;
 
     Fly fly;
-    FlyingBlock debris[10 * world_r / max_block_size];
+    vector<FlyingBlock> debris;
     int inanimate;
 
-    TouchAllBlocks(World &w) : Game(w) {}
+    MoveAllBlocks(World &w)
+      : Game(w),
+        world_r(50),
+        max_block_size(10),
+        blocks_count(30)
+      {}
 
     virtual void start()
     {
-      for (int i = 0; i < ARRAY_SIZE(debris); i++) {
+      debris.resize(blocks_count);
+      for (int i = 0; i < debris.size(); i++) {
         FlyingBlock &b = debris[i];
         b.ori.rotate(Pt::random() * 2 * M_PI);
+        b.mass.v_ang = Pt::random() / 2;
 
         if (i == 0) {
           b.pos.set(0, 0, -5);
@@ -750,7 +768,7 @@ class TouchAllBlocks : public Game {
       FlyingBlock all;
       FlyingBlock inanimates;
 
-      void init(const TouchAllBlocks &g)
+      void init(const MoveAllBlocks &g)
       {
         speed.pos.set(0, -.68, -1);
         want_speed.pos = speed.pos - Pt(0, 0, .002);
@@ -771,7 +789,7 @@ class TouchAllBlocks : public Game {
         was_inanimate = g.world.ufos.size() - 2;
       }
 
-      void update(const TouchAllBlocks &g) {
+      void update(const MoveAllBlocks &g) {
         double v = sqrt(g.fly.mass.v.len()) / 10;
         speed.scale.set(.001 + v/10, .02, .001);
         double c[][4] = {{1, min(.8*v, 1.), .3, .7}, {.95, min(.8*v * 1.1, 1.), .28, .7}};
@@ -794,7 +812,28 @@ class TouchAllBlocks : public Game {
         };
         if (was_inanimate != g.inanimate) {
           if (! g.inanimate) 
-            printf("YOU WIN!");
+            printf(
+                   "YOU WIN!\n"
+                   "YOU WIN!\n"
+                   "YOU WIN!\n"
+                   "YOU WIN!\n"
+                   "YOU WIN!\n"
+                   "YOU WIN!\n"
+                   "YOU WIN!\n"
+                   "YOU WIN!\n"
+                   "YOU WIN!\n"
+                   "YOU WIN!\n"
+                   "YOU WIN!\n"
+                   "YOU WIN!\n"
+                   "YOU WIN!\n"
+                   "YOU WIN!\n"
+                   "YOU WIN!\n"
+                   "YOU WIN!\n"
+                   "YOU WIN!\n"
+                   "YOU WIN!\n"
+                   "YOU WIN!\n"
+                   "YOU WIN!\n"
+                   );
           else
             printf("got %d of %d\n", g.inanimate, g.world.ufos.size());
           show_got_one = 1.1;
@@ -829,8 +868,9 @@ class TouchAllBlocks : public Game {
         printf("%d %f\n", axis, (float)axis_val);
         break;
 
-      case 3:
+      case 0:
         fly.roll_y = -(axis_val*axis_val*axis_val) / 10;
+        fly.roll_z = (axis_val*axis_val*axis_val) / 50;
         break;
 
       case 1:
@@ -838,7 +878,7 @@ class TouchAllBlocks : public Game {
         fly.roll_x = (axis_val*axis_val*axis_val) / 10;
         break;
 
-      case 0:
+      case 3:
         fly.roll_z = (axis_val*axis_val*axis_val) / 10;
         break;
 
@@ -1039,7 +1079,7 @@ int main(int argc, char *argv[])
 
   World world;
 
-  TouchAllBlocks game(world);
+  MoveAllBlocks game(world);
 
   game.start();
   game.draw();
