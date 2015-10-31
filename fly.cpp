@@ -1,3 +1,6 @@
+int W = 800;
+int H = 500;//1200;
+
 #include <stdlib.h>
 #include <time.h>
 
@@ -487,9 +490,9 @@ class Ufo : public Visible {
       double l = scale.len();
 
       Mix *m = new Mix();
-      m->add(new Sine(dens*100./max(.01,scale.x/l), vol/(12), frandom()*2.*M_PI));
-      m->add(new Sine(dens*100./max(.01,scale.y/l), vol/(12), frandom()*2.*M_PI));
-      m->add(new Sine(dens*100./max(.01,scale.z/l), vol/(12), frandom()*2.*M_PI));
+      m->add(new Sine(dens*100./max(.01,scale.x/l), vol/3, frandom()*2.*M_PI));
+      m->add(new Sine(dens*100./max(.01,scale.y/l), vol/3, frandom()*2.*M_PI));
+      m->add(new Sine(dens*100./max(.01,scale.z/l), vol/3, frandom()*2.*M_PI));
 
       Audio.play(new Envelope(max(.01,.02/dens), max(.01,.03/dens), max(.01,1./dens), m));
     }
@@ -867,6 +870,7 @@ class Game {
 
     virtual void on_joy_axis(int axis, double axis_val) {};
     virtual void on_joy_button(int button, bool down) {};
+    virtual void on_key(int keysym, bool down) {};
 
     virtual void on_collision(Ufo &u, Ufo &v) {
       u.play_bump(min(1., 1./((u.pos - cam.from).len()))/3);
@@ -1137,6 +1141,61 @@ class BlockSpace : public Game {
         break;
       }
     }
+
+    virtual void on_key(int keysym, bool down)
+    {
+      switch (keysym) {
+      case SDLK_UP:
+      case 'w':
+      case 'k':
+        fly.roll_x = down? -.1 : 0;
+        break;
+
+      case SDLK_LEFT:
+      case 'a':
+      case 'h':
+        fly.roll_y = down? .1 : 0;
+        break;
+
+      case SDLK_DOWN:
+      case 's':
+      case 'j':
+        fly.roll_x = down? .1 : 0;
+        break;
+
+      case SDLK_RIGHT:
+      case 'd':
+      case 'l':
+        fly.roll_y = down? -.1 : 0;
+        break;
+
+      case 'q':
+        fly.roll_z = down? -.1 : 0;
+        break;
+      case 'e':
+        fly.roll_z = down? .1 : 0;
+        break;
+
+      case SDLK_PAGEUP:
+      case '+':
+      case '=':
+      case ' ':
+      case '1':
+        fly.propulsion_forward = down? 1 : 0;
+        break;
+
+      case SDLK_PAGEDOWN:
+      case '-':
+      case 'b':
+        fly.propulsion_break = down? 1 : 0;
+        break;
+
+      default:
+        printf("key %d %c\n", keysym, (char)keysym);
+        break;
+
+      }
+    }
 };
 
 
@@ -1310,9 +1369,6 @@ class FindTheLight : public BlockSpace {
 
 char *audio_path = NULL;
 
-int W = 1920;
-int H = 900;//1200;
-
 SDL_Surface *screen = NULL;
 
 
@@ -1330,10 +1386,12 @@ int main(int argc, char *argv[])
 
   int c;
 
+  const char *audio_out_path = NULL;
+
   ip.random_seed = time(NULL);
 
   while (1) {
-    c = getopt(argc, argv, "hf:g:r:");
+    c = getopt(argc, argv, "hf:g:r:A:");
     if (c == -1)
       break;
    
@@ -1366,6 +1424,10 @@ int main(int argc, char *argv[])
         ip.random_seed = atoi(optarg);
         break;
 
+      case 'A':
+        audio_out_path = optarg;
+        break;
+
       case '?':
         error = true;
       case 'h':
@@ -1395,11 +1457,23 @@ int main(int argc, char *argv[])
 "           may slew if your system cannot calculate fast enough.\n"
 "           If zero, run as fast as possible. Default is %.1f.\n"
 "  -r seed  Supply a random seed to start off with.\n"
+"  -A file  Write raw audio data to file.\n"
 , W, H, want_fps
 );
     if (error)
       return 1;
     return 0;
+  }
+
+
+  if (audio_out_path) {
+    /*
+    if (access(out_stream_path, F_OK) == 0) {
+      fprintf(stderr, "file exists, will not overwrite: %s\n", out_stream_path);
+      exit(1);
+    }
+    */
+    Audio.write_to(audio_out_path);
   }
 
   const int maxpixels = 1e4;
@@ -1444,7 +1518,7 @@ int main(int argc, char *argv[])
 
   atexit(SDL_Quit);
   SDL_WM_SetCaption("fly", NULL);
-  screen = SDL_SetVideoMode(W,H, 32, SDL_OPENGL | SDL_FULLSCREEN);
+  screen = SDL_SetVideoMode(W,H, 32, SDL_OPENGL);// | SDL_FULLSCREEN);
   SDL_ShowCursor(SDL_DISABLE);
 
   glMatrixMode( GL_PROJECTION );
@@ -1468,6 +1542,7 @@ int main(int argc, char *argv[])
   srandom(ip.random_seed);
 
   Audio.start();
+  //Audio.play(new Sine(140, 0.01));
 
   World world;
 
@@ -1545,7 +1620,18 @@ int main(int argc, char *argv[])
             case 13:
               SDL_WM_ToggleFullScreen(screen);
               break;
+
+            default:
+              game.on_key(c, true);
+              break;
             }
+          }
+          break;
+
+        case SDL_KEYUP:
+          {
+            int c = event.key.keysym.sym;
+            game.on_key(c, false);
           }
           break;
         }

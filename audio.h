@@ -3,46 +3,128 @@
 #include "foreach.h"
 
 class Sound {
+    bool is_dropped = false;
   public:
     virtual ~Sound() {}
 
-    /* return true when done, and this sound will be dropped. */
-    virtual bool add_next(double *dest) = 0;
+    void drop();
+
+    inline bool done() const
+    {
+      return is_dropped;
+    }
+
+    /* return true when done, and this sound will be done. */
+    virtual void add_next(double *dest) = 0;
+    virtual void gc() {};
 };
 
+class Mix : public Sound {
+  public:
+
+    list<Sound*> in;
+
+    Mix()
+    {}
+
+    Mix *add(Sound *new_in)
+    {
+      in.push_back(new_in);
+      return this;
+    }
+
+    virtual ~Mix()
+    {
+      foreach(s, in) {
+        delete (*s);
+        s = in.erase(s);
+      }
+    }
+
+    virtual void add_next(double *dest)
+    {
+      bool all_done = true;
+
+      foreach(s, in) {
+        (*s)->add_next(dest);
+        all_done = all_done && (*s)->done();
+      }
+
+      if (all_done) {
+        drop();
+      }
+    }
+
+    virtual void gc()
+    {
+      foreach (i, in) {
+        Sound *s = *i;
+        if (s->done()) {
+          delete s;
+          i = in.erase(i);
+        }
+        else
+          s->gc();
+      }
+    }
+};
+
+
 int Audio_render_thread(void *arg);
+int Audio_gc_thread(void *arg);
 void Audio_play_callback(void *userdata, Uint8 *stream, int len);
 
 struct _Audio {
-  volatile bool is_on = false;
+private:
+  Mix playing;
+public:
+  volatile bool is_on;
 
   const int channels = 2;
   const int frame_size = channels * sizeof(Sint16);
   const int sample_size = sizeof(Sint16);
-  int buf_len = 1024;
-  int buf_samples = buf_len / sample_size;
-  int buf_frames = buf_len / frame_size;
-  int freq = 44100;
-  double *buf_play = 0;
-  double *buf_render = 0;
-  double *buf_zeros = 0;
+  int buf_len;
+  int buf_samples;
+  int buf_frames;
+  int freq;
+  double *buf_play;
+  double *buf_render;
+  double *buf_zeros;
   SDL_Thread *render_thread_token = 0;
+  SDL_Thread *gc_thread_token = 0;
 
   SDL_sem *please_render;
+  SDL_sem *please_gc;
 
   SDL_AudioSpec audio_spec;
 
-  list<Sound*> playing;
+  list<Sound*> start_playing_queue;
+  SDL_sem *change_playing_mutex;
 
-  void play(Sound *sound)
+  const char *write_to_path;
+  FILE *write_to_f;
+  
+  _Audio() :
+     is_on(false),
+     buf_len(1024),
+     freq(44100),
+     write_to_path(NULL),
+     write_to_f(NULL),
+     buf_play(0),
+     buf_render(0),
+     buf_zeros(0),
+     render_thread_token(0),
+     gc_thread_token(0)
   {
-    playing.push_front(sound);
+    buf_samples = buf_len / sample_size;
+    buf_frames = buf_len / frame_size;
+    please_render = SDL_CreateSemaphore(0);
+    please_gc = SDL_CreateSemaphore(0);
+    change_playing_mutex = SDL_CreateSemaphore(1);
   }
 
   bool start()
   {
-    please_render = SDL_CreateSemaphore(0);
-
     SDL_AudioSpec audio_want_spec;
     audio_want_spec.freq = freq;
     audio_want_spec.format = AUDIO_S16;
@@ -54,6 +136,7 @@ struct _Audio {
     if (SDL_OpenAudio(&audio_want_spec, &audio_spec) < 0) {
       fprintf(stderr, "Cannot open audio: %s\n", SDL_GetError());
       SDL_DestroySemaphore(please_render);
+      SDL_DestroySemaphore(please_gc);
       return false;
     }
 
@@ -77,6 +160,9 @@ struct _Audio {
 
     is_on = true;
 
+    // if a write_to_path is set, this opens the file.
+    write_to(write_to_path);
+
     buf_frames = audio_spec.samples;
     buf_samples = buf_frames * channels;
     buf_len = buf_samples * sample_size;
@@ -93,55 +179,52 @@ struct _Audio {
     freq = audio_spec.freq;
 
     next();
-    SDL_Thread *render_thread_token = SDL_CreateThread(Audio_render_thread, NULL);
+    render_thread_token = SDL_CreateThread(Audio_render_thread, NULL);
+    gc_thread_token = SDL_CreateThread(Audio_gc_thread, NULL);
     SDL_PauseAudio(0);
     return true;
+  }
+
+  void play(Sound *sound)
+  {
+    start_playing_queue.push_back(sound);
   }
 
   void stop()
   {
     is_on = false;
+    SDL_SemPost(please_render);
+    SDL_SemPost(please_gc);
     if (render_thread_token) {
       SDL_WaitThread(render_thread_token, NULL);
       render_thread_token = NULL;
     }
+    if (gc_thread_token) {
+      SDL_WaitThread(gc_thread_token, NULL);
+      gc_thread_token = NULL;
+    }
     SDL_CloseAudio();
     SDL_DestroySemaphore(please_render);
+    SDL_DestroySemaphore(please_gc);
     delete[] buf_play;
     delete[] buf_render;
     delete[] buf_zeros;
     buf_play = 0;
     buf_render = 0;
     buf_zeros = 0;
+    if (write_to_f) {
+      fclose(write_to_f);
+      write_to_f = NULL;
+    }
   }
 
-  void next()
+  void next();
+
+  void write_to(const char *path)
   {
-    double m;
-    double *dest = buf_render;
-    for (int i = 0; i < buf_samples; i++)
-      dest[i] = 0.;
-
-    m = 0;
-    for (int i = 0; i < buf_samples; i++)
-      m = max(m, dest[i]);
-
-    int n = 0;
-    foreach(p, playing) {
-      if ((*p)->add_next(dest)) {
-        Sound *s = *p;
-        p = playing.erase(p);
-        delete s;
-      }
-      else
-        n ++;
-    }
-
-    static int skip = 0;
-    if (skip++ > 100) {
-      skip = 0;
-      printf("%d sounds\n", n);
-    }
+    write_to_path = path;
+    if (is_on && (write_to_f == NULL))
+      write_to_f = fopen(write_to_path, "w");
   }
 
   void render_thread()
@@ -153,9 +236,28 @@ struct _Audio {
       buf_render = tmp;
 
       next();
+
+      if (write_to_f) {
+        fwrite(buf_render, sizeof(double), buf_samples, write_to_f);
+      }
+
       SDL_SemWait(please_render);
     }
   }
+
+  void gc_thread()
+  {
+    while (is_on) {
+      for (int i = SDL_SemValue(please_gc); i; i--) {
+        if (SDL_SemTryWait(please_gc) != 0)
+          break;
+      }
+      gc();
+      SDL_SemWait(please_gc);
+    }
+  }
+
+  void gc();
 
 };
 
@@ -163,12 +265,18 @@ _Audio Audio;
 
 void Audio_play_callback(void *userdata, Uint8 *stream, int len)
 {
+  if (len != Audio.buf_len)
+    printf("AUDIO BUF LEN MISMATCH! %d %d\n", Audio.buf_len, len);
   double *p = (double*)Audio.buf_play;
   int n = len / Audio.sample_size;
   Sint16 *s = (Sint16*)stream;
   for (int i = 0; i < n; i++) {
     s[i] = min((Sint16)0x7fff, max((Sint16)0x8000, (Sint16)(p[i] * ((double)0x7fff))));
   }
+  
+  int semval = SDL_SemValue(Audio.please_render);
+  if (semval)
+    printf("underrun %d\n", semval);
   SDL_SemPost(Audio.please_render);
 }
 
@@ -178,6 +286,48 @@ int Audio_render_thread(void *arg)
   Audio.render_thread();
   printf("Audio render thread concluded.\n");
   return 0;
+}
+
+int Audio_gc_thread(void *arg)
+{
+  printf("Audio garbage collection thread launched.\n");
+  Audio.gc_thread();
+  printf("Audio garbage collection thread concluded.\n");
+  return 0;
+}
+
+void Sound::drop()
+{
+  is_dropped = true;
+  SDL_SemPost(Audio.please_gc);
+}
+
+void _Audio::next()
+{
+  double *dest = buf_render;
+  for (int i = 0; i < buf_samples; i++)
+    dest[i] = 0.;
+
+  SDL_SemWait(change_playing_mutex);
+  playing.add_next(dest);
+  SDL_SemPost(change_playing_mutex);
+
+  if (start_playing_queue.size()) {
+    SDL_SemWait(change_playing_mutex);
+    foreach (i, start_playing_queue) {
+      Sound *s = *i;
+      playing.add(s);
+      i = start_playing_queue.erase(i);
+    }
+    SDL_SemPost(change_playing_mutex);
+  }
+}
+
+void _Audio::gc()
+{
+  SDL_SemWait(change_playing_mutex);
+  playing.gc();
+  SDL_SemPost(change_playing_mutex);
 }
 
 class Sine : public Sound {
@@ -194,7 +344,9 @@ class Sine : public Sound {
       this->phase = phase;
     }
 
-    virtual bool add_next(double *dest)
+    virtual ~Sine() {};
+
+    virtual void add_next(double *dest)
     {
       double f = (double)Audio.freq * Audio.channels;
       double t;
@@ -208,48 +360,7 @@ class Sine : public Sound {
       t = ((double)Audio.buf_samples)/f;
       phase += t * freq_rad;
       phase -= trunc(phase / (2.*M_PI)) * (2.*M_PI);
-      return false;
     }
-};
-
-class Mix : public Sound {
-  public:
-
-    list<Sound*> in;
-
-    Mix()
-    {}
-
-    Mix *add(Sound *new_in)
-    {
-      in.push_front(new_in);
-      return this;
-    }
-
-    virtual ~Mix()
-    {
-      foreach(s, in) {
-        delete (*s);
-        s = in.erase(s);
-      }
-    }
-
-    virtual bool add_next(double *dest)
-    {
-      bool all_done = true;
-
-      foreach(s, in) {
-        if ((*s)->add_next(dest)) {
-          delete (*s);
-          s = in.erase(s);
-        }
-        else
-          all_done = false;
-      }
-
-      return all_done;
-    }
-
 };
 
 class Envelope : public Sound {
@@ -260,14 +371,14 @@ class Envelope : public Sound {
     int t;
     int a, h, d, ah, ahd;
 
-    Envelope(double a, double h, double d, Sound *in)
+    Envelope(double a_, double h_, double d_, Sound *in_)
     {
-      this->in = in;
-      this->a = a * Audio.freq;
-      this->h = h * Audio.freq;
-      this->d = d * Audio.freq;
-      ah = this->a + this->h;
-      ahd = ah + this->d;
+      in = in_;
+      a = a_ * Audio.freq;
+      h = h_ * Audio.freq;
+      d = d_ * Audio.freq;
+      ah = a + h;
+      ahd = ah + d;
       t = 0;
     }
 
@@ -277,10 +388,10 @@ class Envelope : public Sound {
       in = 0;
     }
 
-    virtual bool add_next(double *dest)
+    virtual void add_next(double *dest)
     {
       double buf[Audio.buf_samples] = { 0. };
-      bool done = in->add_next(buf);
+      in->add_next(buf);
 
       int i = 0;
       double v;
@@ -291,9 +402,8 @@ class Envelope : public Sound {
         dest[i+1] += buf[i+1] * v;
       }
       for (;(t < ah) && (i < Audio.buf_samples); i+=2, t++) {
-        v = 1.;
-        dest[i] += buf[i] * v;
-        dest[i+1] += buf[i+1] * v;
+        dest[i] += buf[i];
+        dest[i+1] += buf[i+1];
       }
       for (;(t < ahd) && (i < Audio.buf_samples); i+=2, t++) {
         v = 1. - ((double)(t-ah))/(double)d;
@@ -301,7 +411,9 @@ class Envelope : public Sound {
         dest[i] += buf[i] * v;
         dest[i+1] += buf[i+1] * v;
       }
-      return done || (t >= ahd);
+      if (in->done() || (t >= ahd)) {
+        drop();
+      }
     }
 
 };
