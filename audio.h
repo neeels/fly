@@ -36,7 +36,6 @@ struct _Audio {
 
   void play(Sound *sound)
   {
-    printf("Adding sound\n");
     playing.push_front(sound);
   }
 
@@ -129,15 +128,20 @@ struct _Audio {
 
     int n = 0;
     foreach(p, playing) {
-      n ++;
       if ((*p)->add_next(dest)) {
         Sound *s = *p;
         p = playing.erase(p);
         delete s;
-        printf("drop\n");
       }
+      else
+        n ++;
     }
-    printf("%d sounds\n", n);
+
+    static int skip = 0;
+    if (skip++ > 100) {
+      skip = 0;
+      printf("%d sounds\n", n);
+    }
   }
 
   void render_thread()
@@ -163,7 +167,7 @@ void Audio_play_callback(void *userdata, Uint8 *stream, int len)
   int n = len / Audio.sample_size;
   Sint16 *s = (Sint16*)stream;
   for (int i = 0; i < n; i++) {
-    s[i] = p[i] * 32786.;
+    s[i] = min((Sint16)0x7fff, max((Sint16)0x8000, (Sint16)(p[i] * ((double)0x7fff))));
   }
   SDL_SemPost(Audio.please_render);
 }
@@ -183,7 +187,7 @@ class Sine : public Sound {
     double freq_rad;
     double phase;
 
-    Sine(double freq=440, double amp=.5, double phase = 0)
+    Sine(double freq=440, double amp=.1, double phase = 0)
     {
       freq_rad = 2. * M_PI * freq;
       this->amp = amp;
@@ -198,8 +202,8 @@ class Sine : public Sound {
       for (int i = 0; i < Audio.buf_samples; i+=2) {
         t = ((double)i) / f;
         v = amp * sin(phase + t * freq_rad);
-        dest[i] = v;
-        dest[i+1] = v;
+        dest[i] += v;
+        dest[i+1] += v;
       }
       t = ((double)Audio.buf_samples)/f;
       phase += t * freq_rad;
@@ -216,9 +220,9 @@ class Mix : public Sound {
     Mix()
     {}
 
-    Mix *add(Sound *in)
+    Mix *add(Sound *new_in)
     {
-      this->in.push_front(in);
+      in.push_front(new_in);
       return this;
     }
 
@@ -232,13 +236,18 @@ class Mix : public Sound {
 
     virtual bool add_next(double *dest)
     {
-      bool done = true;
+      bool all_done = true;
 
       foreach(s, in) {
-        done = (*s)->add_next(dest) && done;
+        if ((*s)->add_next(dest)) {
+          delete (*s);
+          s = in.erase(s);
+        }
+        else
+          all_done = false;
       }
 
-      return done;
+      return all_done;
     }
 
 };
@@ -249,13 +258,16 @@ class Envelope : public Sound {
     Sound *in;
 
     int t;
-    int a, d;
+    int a, h, d, ah, ahd;
 
-    Envelope(double a, double d, Sound *in)
+    Envelope(double a, double h, double d, Sound *in)
     {
       this->in = in;
       this->a = a * Audio.freq;
+      this->h = h * Audio.freq;
       this->d = d * Audio.freq;
+      ah = this->a + this->h;
+      ahd = ah + this->d;
       t = 0;
     }
 
@@ -275,16 +287,21 @@ class Envelope : public Sound {
       for (;(t < a) && (i < Audio.buf_samples); i+=2, t++) {
         v = ((double)t)/a;
         v *= v;
-        dest[i] = buf[i] * v;
-        dest[i+1] = buf[i+1] * v;
+        dest[i] += buf[i] * v;
+        dest[i+1] += buf[i+1] * v;
       }
-      for (;(t < d) && (i < Audio.buf_samples); i+=2, t++) {
-        v = 1. - ((double)(t-a))/(double)d;
+      for (;(t < ah) && (i < Audio.buf_samples); i+=2, t++) {
+        v = 1.;
+        dest[i] += buf[i] * v;
+        dest[i+1] += buf[i+1] * v;
+      }
+      for (;(t < ahd) && (i < Audio.buf_samples); i+=2, t++) {
+        v = 1. - ((double)(t-ah))/(double)d;
         v *= v;
-        dest[i] = buf[i] * v;
-        dest[i+1] = buf[i+1] * v;
+        dest[i] += buf[i] * v;
+        dest[i+1] += buf[i+1] * v;
       }
-      return done || (t > (a + d));
+      return done || (t >= ahd);
     }
 
 };

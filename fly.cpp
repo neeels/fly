@@ -387,9 +387,18 @@ void make_block(Visible &v) {
                faces, ARRAY_SIZE(faces));
 }
 
-void color_scheme(Visible &b, const Pt &base_rgb) {
+void color_scheme(Visible &b, const Pt &base_rgb)
+{
   for (int i = 0; i < b.points.size(); i ++) {
     b.points[i].c = (base_rgb + Pt::random(-.1, .1)).limit(0, 1);
+  }
+}
+
+void color_grey(Visible &b, double intens)
+{
+  Pt g = intens;
+  for (int i = 0; i < b.points.size(); i ++) {
+    b.points[i].c = g * frandom(0.9, 1.1);
   }
 }
 
@@ -398,9 +407,19 @@ class Ufo : public Visible {
 
     Mass mass;
 
-    bool moving()
+    bool moving(double min_len=1e-6)
     {
-      return mass.v.len() > 1.e-6;
+      return mass.v.len() > min_len;
+    }
+
+    bool rotating(double min_len=1e-6)
+    {
+      return mass.v_ang.len() > min_len;
+    }
+
+    bool animate(double min_len=1e-6)
+    {
+      return moving(min_len) || rotating(min_len);
     }
 
     virtual void step() {
@@ -459,6 +478,20 @@ class Ufo : public Visible {
       o.pos = at + n * (1.01 * o.radius());
 
       return true;
+    }
+
+    void play_bump(double vol=1) const
+    {
+      double v = max(.01, scale.volume());
+      double dens = max(.05, min(10., sqrt(mass.m / v))) * frandom(.9, 1.1);
+      double l = scale.len();
+
+      Mix *m = new Mix();
+      m->add(new Sine(dens*100./max(.01,scale.x/l), vol/(12), frandom()*2.*M_PI));
+      m->add(new Sine(dens*100./max(.01,scale.y/l), vol/(12), frandom()*2.*M_PI));
+      m->add(new Sine(dens*100./max(.01,scale.z/l), vol/(12), frandom()*2.*M_PI));
+
+      Audio.play(new Envelope(max(.01,.02/dens), max(.01,.03/dens), max(.01,1./dens), m));
     }
 };
 
@@ -526,6 +559,7 @@ class Fly : public Ufo {
 
 
   virtual void step() {
+    mass.v_ang *= .5;
       roll_x.step();
       roll_y.step();
       roll_z.step();
@@ -767,10 +801,10 @@ class World {
       foreach(u, ufos) {
         (*u)->step();
       }
+      lights.step();
     }
 
     void draw() {
-      lights.step();
       foreach(u, ufos) {
         (*u)->draw();
       }
@@ -792,8 +826,9 @@ class Game {
     Camera cam;
     bool done;
     int won;
+    double redraw_dist;
 
-    Game (World &w) :world(w), done(false), won(0)
+    Game (World &w) :world(w), done(false), won(0), redraw_dist(0)
     {
     }
 
@@ -834,12 +869,8 @@ class Game {
     virtual void on_joy_button(int button, bool down) {};
 
     virtual void on_collision(Ufo &u, Ufo &v) {
-      printf("COLL!\n");
-      Audio.play(new Envelope(.01, .1,
-              (new Mix())
-                ->add(new Sine(u.scale.len()*440))
-                ->add(new Sine(v.scale.len()*440))
-              ));
+      u.play_bump(min(1., 1./((u.pos - cam.from).len()))/3);
+      v.play_bump(min(1., 1./((v.pos - cam.from).len()))/3);
     };
 
     void draw_scene()
@@ -852,6 +883,50 @@ class Game {
       cam.gluLookAt();
 
       world.draw();
+
+      if (redraw_dist > .1) {
+        Pt dir = cam.at - cam.from;
+        Pt p[] = {
+          Pt(-redraw_dist, -redraw_dist, -redraw_dist),
+          Pt(           0, -redraw_dist, -redraw_dist),
+          Pt( redraw_dist, -redraw_dist, -redraw_dist),
+          Pt(-redraw_dist,            0, -redraw_dist),
+          Pt(           0,            0, -redraw_dist),
+          Pt( redraw_dist,            0, -redraw_dist),
+          Pt(-redraw_dist,  redraw_dist, -redraw_dist),
+          Pt(           0,  redraw_dist, -redraw_dist),
+          Pt( redraw_dist,  redraw_dist, -redraw_dist),
+
+          Pt(-redraw_dist, -redraw_dist,            0),
+          Pt(           0, -redraw_dist,            0),
+          Pt( redraw_dist, -redraw_dist,            0),
+          Pt(-redraw_dist,            0,            0),
+
+          Pt( redraw_dist,            0,            0),
+          Pt(-redraw_dist,  redraw_dist,            0),
+          Pt(           0,  redraw_dist,            0),
+          Pt( redraw_dist,  redraw_dist,            0),
+
+          Pt(-redraw_dist, -redraw_dist,  redraw_dist),
+          Pt(           0, -redraw_dist,  redraw_dist),
+          Pt( redraw_dist, -redraw_dist,  redraw_dist),
+          Pt(-redraw_dist,            0,  redraw_dist),
+          Pt(           0,            0,  redraw_dist),
+          Pt( redraw_dist,            0,  redraw_dist),
+          Pt(-redraw_dist,  redraw_dist,  redraw_dist),
+          Pt(           0,  redraw_dist,  redraw_dist),
+          Pt( redraw_dist,  redraw_dist,  redraw_dist),
+        };
+
+        for (int i = 0; i < ARRAY_SIZE(p); i++) {
+          if (! p[i].project(dir).zero()) {
+            glPushMatrix();
+            p[i].glTranslated();
+            world.draw();
+            glPopMatrix();
+          }
+        }
+      }
     }
 
     void draw()
@@ -889,10 +964,12 @@ class BlockSpace : public Game {
 
     BlockSpace(World &w)
       : Game(w),
-        world_r(10),
-        max_block_size(1),
-        blocks_count(50)
-      {}
+        world_r(15),
+        max_block_size(2),
+        blocks_count(23)
+    {
+      //redraw_dist = world_r * 2.;//10.0;
+    }
 
     virtual void start()
     {
@@ -905,7 +982,8 @@ class BlockSpace : public Game {
         b->pos = Pt::random(-world_r, world_r);
         b->scale = Pt::random(max_block_size / 10, max_block_size);
 
-        b->mass.m = b->scale.x * b->scale.y * b->scale.z;
+        double dens = frandom(.5, 1.5);
+        b->mass.m = dens * b->scale.volume();
 
         world.add(*b);
       }
@@ -1049,6 +1127,11 @@ class BlockSpace : public Game {
         fly.propulsion_break = down? 1 : 0;
         break;
 
+      case 2:
+        if (down)
+          fly.play_bump(1.);
+        break;
+
       default:
         printf("button %d\n", button);
         break;
@@ -1074,14 +1157,18 @@ class MoveAllBlocks : public BlockSpace {
 
         if (i == 0) {
           b.pos.set(0, 0, -5);
-          b.scale = 1.0;
+          //b.scale = 1.0;
+          //b.mass.m = 1;
         }
         else
         if (i == 1) {
           b.pos.set(3, 3, -5);
-          b.mass.v.set(-.7, -.7, 0);
-          b.scale = 1.001;
+          b.mass.v.set(-2, -2, 0);
+          //b.scale = 1.001;
+          //b.mass.m = 1.5;
         }
+
+        color_grey(b, .1);
       }
 
       move_osd_init();
@@ -1090,9 +1177,16 @@ class MoveAllBlocks : public BlockSpace {
     void count_inanimate()
     {
       inanimate = 0;
-      foreach(u, world.ufos) {
-        if (!(*u)->moving())
+      foreach(_u, world.ufos) {
+        Ufo &u = **_u;
+        if (! u.animate(1e-2)) {
+          if (u.animate(0)) {
+            u.mass.v = 0;
+            u.mass.v_ang = 0;
+            color_grey(u, .1);
+          }
           inanimate ++;
+        }
       }
     }
 
@@ -1105,7 +1199,20 @@ class MoveAllBlocks : public BlockSpace {
       BlockSpace::step();
 
       move_osd_update();
+
+      foreach(u, world.ufos) {
+        (*u)->mass.v *= .998;
+        (*u)->mass.v_ang *= .998;
+      }
     }
+
+    virtual void on_collision(Ufo &u, Ufo &v) {
+      BlockSpace::on_collision(u, v);
+      u.mass.v_ang = Pt::random();
+      v.mass.v_ang = Pt::random();
+      color_scheme(u, Pt::random(0.1, 1));
+      color_scheme(v, Pt::random(0.1, 1));
+    };
 
 
     // OSD
@@ -1196,24 +1303,6 @@ class FindTheLight : public BlockSpace {
       }
 
       BlockSpace::start();
-
-      for (int i = 0; i < debris.size(); i++) {
-        FlyingBlock &b = debris[i];
-
-        if (i == 0) {
-          b.pos.set(2, 0, -10);
-          b.mass.v = 0;
-          b.scale = 1;
-        }
-        else
-        if (i == 1) {
-          b.pos.set(-2, 0, -10);
-          b.mass.v = 0;
-          b.scale = 1;
-        }
-        else
-          break;
-      }
     }
 
 };
@@ -1382,7 +1471,7 @@ int main(int argc, char *argv[])
 
   World world;
 
-  FindTheLight game(world);
+  MoveAllBlocks game(world);
 
   game.start();
   game.draw();

@@ -76,6 +76,10 @@ class Pt {
       return sqrt(x*x + y*y + z*z);
     }
 
+    double volume() const {
+      return fabs(x * y * z);
+    }
+
     Pt unit(const Pt &if_zero=Pt()) const {
       double l = len();
       if (l < 1.e-6)
