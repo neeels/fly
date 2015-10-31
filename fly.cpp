@@ -408,10 +408,10 @@ class Ufo : public Visible {
       ori.rotate_e(mass.v_ang * dt);
     };
 
-    void collide(Ufo &o)
+    bool collide(Ufo &o)
     {
       if (!radius_overlaps(o))
-        return;
+        return false;
 
       Pt dir = o.pos - pos;
       Pt n = dir.unit();
@@ -457,6 +457,8 @@ class Ufo : public Visible {
 */
       pos = at - n * (1.01 * radius());
       o.pos = at + n * (1.01 * o.radius());
+
+      return true;
     }
 };
 
@@ -782,14 +784,6 @@ class World {
       }
     }
 
-    void collide() {
-      for (int i = 0; i < ufos.size(); i++) {
-        for (int j = i+1; j < ufos.size(); j++) {
-          if (ufos[i]->moving() || ufos[j]->moving())
-            ufos[i]->collide(*ufos[j]);
-        }
-      }
-    }
 };
 
 class Game {
@@ -839,6 +833,15 @@ class Game {
     virtual void on_joy_axis(int axis, double axis_val) {};
     virtual void on_joy_button(int button, bool down) {};
 
+    virtual void on_collision(Ufo &u, Ufo &v) {
+      printf("COLL!\n");
+      Audio.play(new Envelope(.01, .1,
+              (new Mix())
+                ->add(new Sine(u.scale.len()*440))
+                ->add(new Sine(v.scale.len()*440))
+              ));
+    };
+
     void draw_scene()
     {
       glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
@@ -859,6 +862,19 @@ class Game {
       osd_draw();
       glFlush();
       SDL_GL_SwapBuffers();
+    }
+
+    void collide() {
+      for (int i = 0; i < world.ufos.size(); i++) {
+        for (int j = i+1; j < world.ufos.size(); j++) {
+          Ufo *a = world.ufos[i];
+          Ufo *b = world.ufos[j];
+          if (a->moving() || b->moving()) {
+            if (a->collide(*b))
+              on_collision(*a, *b);
+          }
+        }
+      }
     }
 };
 
@@ -901,7 +917,7 @@ class BlockSpace : public Game {
 
     virtual void step()
     {
-      world.collide();
+      collide();
 
       world.wrap(fly.pos + fly.ori.nose * (world_r/2), world_r);
 
@@ -1160,8 +1176,6 @@ class FindTheLight : public BlockSpace {
     virtual void start()
     {
       light_pos = Pt::randoml(500, 600);
-      printf("RRRR %f  ", light_pos.len());
-      light_pos.print();
 
       world.lights.clear();
       {
@@ -1364,6 +1378,8 @@ int main(int argc, char *argv[])
   printf("seed %d\n", (int)ip.random_seed);
   srandom(ip.random_seed);
 
+  Audio.start();
+
   World world;
 
   FindTheLight game(world);
@@ -1458,6 +1474,8 @@ int main(int argc, char *argv[])
     } // while running, for event polling / idle waiting
 
   } // while running
+
+  Audio.stop();
 
   running = false;
 
