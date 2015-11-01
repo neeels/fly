@@ -1262,17 +1262,17 @@ class BlockSpace : public Game {
         break;
 
       case 0:
-        fly.roll_y = -(axis_val*axis_val*axis_val) / 10;
+        fly.roll_y = -(axis_val*axis_val*axis_val) / 5;
         fly.roll_z = (axis_val*axis_val*axis_val) / 50;
         break;
 
       case 1:
       case 4:
-        fly.roll_x = (axis_val*axis_val*axis_val) / 10;
+        fly.roll_x = (axis_val*axis_val*axis_val) / 5;
         break;
 
       case 3:
-        fly.roll_z = (axis_val*axis_val*axis_val) / 10;
+        fly.roll_z = (axis_val*axis_val*axis_val) / 5;
         break;
 
       case 5:
