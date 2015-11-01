@@ -136,6 +136,13 @@ class Pt {
       z *= p.z;
     }
 
+    Pt &set_min(double c) {
+      x = min(x, c);
+      y = min(y, c);
+      z = min(z, c);
+      return *this;
+    }
+
     void set_min(Pt &p) {
       x = min(x, p.x);
       y = min(y, p.y);

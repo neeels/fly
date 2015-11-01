@@ -396,6 +396,93 @@ void make_block(Visible &v) {
                faces, ARRAY_SIZE(faces));
 }
 
+void make_icosahedron(Visible &v)
+{
+  // icosahedron facts...
+  //
+  // outer radius
+  // R = a * (sqrt(10. + 2.*sqrt(5)) / 4.).
+  // inner radius
+  // r = a * ((sqrt(3.) * (3. + sqrt(5.))) / 12.);
+  //
+  // icosahedron cartesian coords
+  // (±1, 0 ,±φ)
+  // (0, ±φ, ±1)
+  // (±φ, ±1, 0)
+  // with  φ = (1. + sqrt(5.))/2. = 1.618033988749895 (golden ratio)
+  //
+  // yields a side length a = 2
+  //
+  // I'd like a unit outer diameter, R = .5;
+  // wanted side length A from R:
+  //    .5 = A * (sqrt(10. + 2.*sqrt(5)) / 4.)
+  // =>  A = .5 * 4. / sqrt(10. + 2.*sqrt(5))
+  //
+  // With above cartesian coords, we'd get a == 2.
+  // So any wanted coordinate C from above coordinate c would be:
+  //   C = c * ( A / 2.)
+  //
+  // thus construct from
+  // (±(A/2.), 0 ,±(φ * A/2.))
+  //
+  // A/2 = .5 * .5 * 4. / sqrt(10. + 2.*sqrt(5))
+  //     = 1. / sqrt(10. + 2.*sqrt(5))
+  //     = 0.2628655560595668
+  //
+  // φ * A/2. = ((1. + sqrt(5.)) / 2) * A/2
+  //          = ((1. + sqrt(5.)) / 2) * (1. / sqrt(10. + 2.*sqrt(5)))
+  //          = (1. + sqrt(5.)) / (2. * sqrt(10. + 2.*sqrt(5)))
+  //          = 0.42532540417602
+
+#define u 0.2628655560595668
+#define g 0.42532540417602
+
+  static double points[][3] = {
+    { 0.,  g,  u},
+    { 0.,  g, -u},
+    { 0., -g, -u},
+    { 0., -g,  u},
+    {  u, 0.,  g},
+    { -u, 0.,  g},
+    { -u, 0., -g},
+    {  u, 0., -g},
+    {  g,  u, 0.},
+    {  g, -u, 0.},
+    { -g, -u, 0.},
+    { -g,  u, 0.},
+  };
+
+  static unsigned int faces[][3] = {
+    {0, 1, 8},
+    {8, 1, 7},
+    {7, 1, 6},
+    {7, 6, 2},
+    {2, 6, 10},
+    {2, 10, 3},
+    {3, 10, 5},
+    {3, 5, 4},
+    {4, 5, 0},
+    {4, 0, 8},
+
+    {8, 7, 9},
+    {9, 7, 2},
+    {9, 2, 3},
+    {9, 3, 4},
+    {9, 4, 8},
+
+    {1, 0, 11},
+    {1, 11, 6},
+    {6, 11, 10},
+    {10, 11, 5},
+    {5, 11, 0},
+  };
+#undef u
+#undef g
+
+  v.load_faces(points, ARRAY_SIZE(points),
+               faces, ARRAY_SIZE(faces));
+}
+
 void color_scheme(Visible &b, const Pt &base_rgb)
 {
   for (int i = 0; i < b.points.size(); i ++) {
@@ -506,10 +593,10 @@ class Ufo : public Visible {
     }
 };
 
-class FlyingBlock : public Ufo {
+class FlyingThing : public Ufo {
   public:
-    FlyingBlock() {
-      make_block(*this);
+    FlyingThing() {
+      make_icosahedron(*this);
       color_scheme(*this, Pt::random(0.1, 1));
     }
 };
@@ -1024,7 +1111,7 @@ class BlockSpace : public Game {
     double v_ang_drag;
 
     Fly fly;
-    vector<FlyingBlock> debris;
+    vector<FlyingThing> debris;
 
     BlockSpace(World &w)
       : Game(w),
@@ -1125,9 +1212,9 @@ class BlockSpace : public Game {
     }
 
     /* OSD */
-    FlyingBlock speed;
+    FlyingThing speed;
     bool draw_want_speed;
-    FlyingBlock want_speed;
+    FlyingThing want_speed;
 
     void osd_init()
     {
@@ -1324,7 +1411,7 @@ class MoveAllBlocks : public BlockSpace {
       BlockSpace::init();
 
       for (int i = 0; i < debris.size(); i++) {
-        FlyingBlock &b = debris[i];
+        FlyingThing &b = debris[i];
         b.mass.v_ang = 0;
 
         if (i == 0) {
@@ -1384,9 +1471,9 @@ class MoveAllBlocks : public BlockSpace {
 
     int was_inanimate;
     double show_got_one;
-    FlyingBlock got_one;
-    FlyingBlock bar_all;
-    FlyingBlock bar_inanimate;
+    FlyingThing got_one;
+    FlyingThing bar_all;
+    FlyingThing bar_inanimate;
 
     void move_osd_init()
     {
@@ -1504,7 +1591,7 @@ class TurnBlocksOn : public BlockSpace {
         on(fly);
 
       for (int i = 0; i < debris.size(); i++) {
-        FlyingBlock &b = debris[i];
+        FlyingThing &b = debris[i];
 
         if (i == 0) {
           b.pos.set(0, 0, -5);
@@ -1557,9 +1644,9 @@ class TurnBlocksOn : public BlockSpace {
 
     int was_off_count;
     double show_got_one;
-    FlyingBlock got_one;
-    FlyingBlock bar_all;
-    FlyingBlock bar_off;
+    FlyingThing got_one;
+    FlyingThing bar_all;
+    FlyingThing bar_off;
 
     void turnon_osd_init()
     {
