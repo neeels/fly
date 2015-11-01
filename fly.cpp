@@ -684,7 +684,6 @@ class Light {
     void step()
     {
       Pt pos = anchor + ofs;
-      printf("light "); anchor.print(); ofs.print(); pos.print();
       glLight(GL_POSITION, pos.x, pos.y, pos.z);
     }
 
@@ -1416,7 +1415,6 @@ class MoveAllBlocks : public BlockSpace {
         got_one.load_colors(c, ARRAY_SIZE(c));
       };
       if (was_inanimate != inanimate) {
-        printf("got %d of %d\n", inanimate, world.ufos.size());
         show_got_one = 1.1;
         was_inanimate = inanimate;
       }
@@ -1589,7 +1587,6 @@ class TurnBlocksOn : public BlockSpace {
         got_one.load_colors(c, ARRAY_SIZE(c));
       };
       if (was_off_count != off_count) {
-        printf("left: %d of %d\n", off_count, world.ufos.size());
         show_got_one = 1.1;
         was_off_count = off_count;
       }
@@ -1669,7 +1666,6 @@ class FindTheLight : public BlockSpace {
 
       debris[0].pos = world.relative_pos(absolute_light_pos);
       debris[0].mass.v = 0;
-      printf("\n");
     }
 
 };
@@ -1951,6 +1947,13 @@ int main(int argc, char *argv[])
 
 
         case SDL_JOYBUTTONDOWN:
+          if (event.jbutton.button == 4) {
+            games.prev_game();
+            break;
+          }
+          if (event.jbutton.button == 5) {
+            games.next_game();
+          }
         case SDL_JOYBUTTONUP:
           games.game().on_joy_button(event.jbutton.button,
                                      event.type == SDL_JOYBUTTONDOWN);
