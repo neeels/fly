@@ -363,9 +363,8 @@ class Visible {
     }
 };
 
-#define ARRAY_SIZE(X) (sizeof(X)/sizeof(*X))
-
-void make_block(Visible &v) {
+void make_block(Visible &v)
+{
   static double points[][3] = {
     {-.5, -.5,  .5},
     {-.5, -.5, -.5},
@@ -483,18 +482,19 @@ void make_icosahedron(Visible &v)
                faces, ARRAY_SIZE(faces));
 }
 
-void color_scheme(Visible &b, const Pt &base_rgb)
+// colors
+void color_scheme(Visible &v, const Pt &base_rgb)
 {
-  for (int i = 0; i < b.points.size(); i ++) {
-    b.points[i].c = (base_rgb + Pt::random(-.1, .1)).limit(0, 1);
+  for (int i = 0; i < v.points.size(); i ++) {
+    v.points[i].c = (base_rgb * frandom(.8, 1.2)).set_min(1);
   }
 }
 
-void color_grey(Visible &b, double intens)
+void color_grey(Visible &v, double intens)
 {
   Pt g = intens;
-  for (int i = 0; i < b.points.size(); i ++) {
-    b.points[i].c = g * frandom(0.9, 1.1);
+  for (int i = 0; i < v.points.size(); i ++) {
+    v.points[i].c = g * frandom(0.9, 1.1);
   }
 }
 
