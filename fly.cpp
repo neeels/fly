@@ -762,6 +762,8 @@ class Lights {
       l.ambient(.5);
       l.diffuse(1);
       l.specular(1);
+      l.atten_const(1);
+      l.atten_quadr(.0);
     }
 
     void step()
@@ -867,14 +869,7 @@ class World {
 
 };
 
-class UserInput {
-  public:
-    virtual void on_joy_axis(int axis, double axis_val) {};
-    virtual void on_joy_button(int button, bool down) {};
-    virtual void on_key(int keysym, bool down) {};
-};
-
-class Game : public UserInput {
+class Game {
   public:
     int level;
     World &world;
@@ -891,6 +886,10 @@ class Game : public UserInput {
       redraw_dist(0)
     {
     }
+
+    virtual void on_joy_axis(int axis, double axis_val) {};
+    virtual void on_joy_button(int button, bool down) {};
+    virtual void on_key(int keysym, bool down) {};
 
     void win()
     {
@@ -1689,15 +1688,6 @@ class Games {
       games.push_back(new FindTheLight(world));
 
       active_idx = 0;
-    }
-
-    ~Games()
-    {
-      foreach(i, games) {
-        Game *g = *i;
-        i = games.erase(i);
-        delete g;
-      }
     }
 
     Game &game()
