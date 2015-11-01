@@ -60,8 +60,8 @@ class Mix : public Sound {
       foreach (i, in) {
         Sound *s = *i;
         if (s->done()) {
-          delete s;
           i = in.erase(i);
+          delete s;
         }
         else
           s->gc();
@@ -91,10 +91,8 @@ public:
   double *buf_render;
   double *buf_zeros;
   SDL_Thread *render_thread_token = 0;
-  SDL_Thread *gc_thread_token = 0;
 
   SDL_sem *please_render;
-  SDL_sem *please_gc;
 
   SDL_AudioSpec audio_spec;
 
@@ -113,13 +111,11 @@ public:
      buf_play(0),
      buf_render(0),
      buf_zeros(0),
-     render_thread_token(0),
-     gc_thread_token(0)
+     render_thread_token(0)
   {
     buf_samples = buf_len / sample_size;
     buf_frames = buf_len / frame_size;
     please_render = SDL_CreateSemaphore(0);
-    please_gc = SDL_CreateSemaphore(0);
     change_playing_mutex = SDL_CreateSemaphore(1);
   }
 
@@ -136,7 +132,6 @@ public:
     if (SDL_OpenAudio(&audio_want_spec, &audio_spec) < 0) {
       fprintf(stderr, "Cannot open audio: %s\n", SDL_GetError());
       SDL_DestroySemaphore(please_render);
-      SDL_DestroySemaphore(please_gc);
       return false;
     }
 
@@ -180,7 +175,7 @@ public:
 
     next();
     render_thread_token = SDL_CreateThread(Audio_render_thread, NULL);
-    gc_thread_token = SDL_CreateThread(Audio_gc_thread, NULL);
+    //gc_thread_token = SDL_CreateThread(Audio_gc_thread, NULL);
     SDL_PauseAudio(0);
     return true;
   }
@@ -194,18 +189,12 @@ public:
   {
     is_on = false;
     SDL_SemPost(please_render);
-    SDL_SemPost(please_gc);
     if (render_thread_token) {
       SDL_WaitThread(render_thread_token, NULL);
       render_thread_token = NULL;
     }
-    if (gc_thread_token) {
-      SDL_WaitThread(gc_thread_token, NULL);
-      gc_thread_token = NULL;
-    }
     SDL_CloseAudio();
     SDL_DestroySemaphore(please_render);
-    SDL_DestroySemaphore(please_gc);
     delete[] buf_play;
     delete[] buf_render;
     delete[] buf_zeros;
@@ -230,7 +219,17 @@ public:
   void render_thread()
   {
     double *tmp;
+#define MEASURE 0
+#if MEASURE
+    unsigned int t0, t1, rendered, waited;
+#endif
+
     while(is_on) {
+
+#if MEASURE
+      t0 = SDL_GetTicks();
+#endif
+
       tmp = buf_play;
       buf_play = buf_render;
       buf_render = tmp;
@@ -241,19 +240,19 @@ public:
         fwrite(buf_render, sizeof(double), buf_samples, write_to_f);
       }
 
-      SDL_SemWait(please_render);
-    }
-  }
-
-  void gc_thread()
-  {
-    while (is_on) {
-      for (int i = SDL_SemValue(please_gc); i; i--) {
-        if (SDL_SemTryWait(please_gc) != 0)
-          break;
-      }
       gc();
-      SDL_SemWait(please_gc);
+
+#if MEASURE
+      t1 = SDL_GetTicks();
+#endif
+
+      SDL_SemWait(please_render);
+
+#if MEASURE
+      waited = SDL_GetTicks() - t1;
+      rendered = t1 - t0;
+      printf("audio rendered %d ms, waited %d ms\n", rendered, waited);
+#endif
     }
   }
 
@@ -288,18 +287,9 @@ int Audio_render_thread(void *arg)
   return 0;
 }
 
-int Audio_gc_thread(void *arg)
-{
-  printf("Audio garbage collection thread launched.\n");
-  Audio.gc_thread();
-  printf("Audio garbage collection thread concluded.\n");
-  return 0;
-}
-
 void Sound::drop()
 {
   is_dropped = true;
-  SDL_SemPost(Audio.please_gc);
 }
 
 void _Audio::next()
@@ -313,13 +303,13 @@ void _Audio::next()
   SDL_SemPost(change_playing_mutex);
 
   if (start_playing_queue.size()) {
-    SDL_SemWait(change_playing_mutex);
     foreach (i, start_playing_queue) {
       Sound *s = *i;
+      SDL_SemWait(change_playing_mutex);
       playing.add(s);
+      SDL_SemPost(change_playing_mutex);
       i = start_playing_queue.erase(i);
     }
-    SDL_SemPost(change_playing_mutex);
   }
 }
 

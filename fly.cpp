@@ -44,9 +44,15 @@ struct Orientation {
   Pt top;
 
   Orientation()
-    : nose(0, 0, -1),
-      top(0, 1, 0)
-  {}
+  {
+    clear();
+  }
+
+  void clear()
+  {
+    nose.set(0, 0, -1);
+    top.set(0, 1, 0);
+  }
 
   Pt right() {
     return nose.cross(top);
@@ -408,6 +414,8 @@ void color_grey(Visible &b, double intens)
 class Ufo : public Visible {
   public:
 
+    void *user_data;
+
     Mass mass;
 
     bool moving(double min_len=1e-6)
@@ -490,9 +498,9 @@ class Ufo : public Visible {
       double l = scale.len();
 
       Mix *m = new Mix();
-      m->add(new Sine(dens*100./max(.01,scale.x/l), vol/3, frandom()*2.*M_PI));
-      m->add(new Sine(dens*100./max(.01,scale.y/l), vol/3, frandom()*2.*M_PI));
-      m->add(new Sine(dens*100./max(.01,scale.z/l), vol/3, frandom()*2.*M_PI));
+      m->add(new Sine(dens*100./max(.01,scale.x/l), vol/2, frandom()*2.*M_PI));
+      m->add(new Sine(dens*100./max(.01,scale.y/l), vol/2, frandom()*2.*M_PI));
+      m->add(new Sine(dens*100./max(.01,scale.z/l), vol/2, frandom()*2.*M_PI));
 
       Audio.play(new Envelope(max(.01,.02/dens), max(.01,.03/dens), max(.01,1./dens), m));
     }
@@ -560,6 +568,15 @@ class Fly : public Ufo {
     }
 	}
 
+  void clear()
+  {
+    mass.v = 0;
+    mass.v_ang = 0;
+    pos = 0;
+    cruise_v = 0;
+    ori.clear();
+    top_lag = ori.right();
+  }
 
   virtual void step() {
     mass.v_ang *= .5;
@@ -667,6 +684,7 @@ class Light {
     void step()
     {
       Pt pos = anchor + ofs;
+      printf("light "); anchor.print(); ofs.print(); pos.print();
       glLight(GL_POSITION, pos.x, pos.y, pos.z);
     }
 
@@ -707,6 +725,11 @@ class Light {
       glLight(GL_SPECULAR, r, g, b);
     }
 
+    void atten_const(double f)
+    {
+      glLightf(id, GL_CONSTANT_ATTENUATION, f);
+    }
+
     void atten_lin(double f)
     {
       glLightf(id, GL_LINEAR_ATTENUATION, f);
@@ -727,15 +750,19 @@ class Lights {
 
     Lights()
     {
-      /* a default light. */
       clear();
+      add_default_light();
+    }
+
+    void add_default_light()
+    {
+      /* a default light. */
       Light &l = add();
       l.init(Pt(5e8, 5e8, -1e8));
       l.ambient(.5);
       l.diffuse(1);
       l.specular(1);
     }
-
 
     void step()
     {
@@ -795,6 +822,23 @@ class World {
     World() {
     }
 
+    Pt absolute_pos(const Pt &p)
+    {
+      return wrap_ofs + p;
+    }
+
+    Pt relative_pos(const Pt &abs_p)
+    {
+      return abs_p - wrap_ofs;
+    }
+
+    void clear()
+    {
+      ufos.resize(0);
+      wrap_ofs = 0;
+      lights.clear();
+    }
+
     void add(Ufo &u) {
       ufos.resize(ufos.size() + 1);
       ufos.back() = &u;
@@ -804,10 +848,10 @@ class World {
       foreach(u, ufos) {
         (*u)->step();
       }
-      lights.step();
     }
 
     void draw() {
+      lights.step();
       foreach(u, ufos) {
         (*u)->draw();
       }
@@ -823,15 +867,28 @@ class World {
 
 };
 
-class Game {
+class UserInput {
   public:
+    virtual void on_joy_axis(int axis, double axis_val) {};
+    virtual void on_joy_button(int button, bool down) {};
+    virtual void on_key(int keysym, bool down) {};
+};
+
+class Game : public UserInput {
+  public:
+    int level;
     World &world;
     Camera cam;
     bool done;
     int won;
     double redraw_dist;
 
-    Game (World &w) :world(w), done(false), won(0), redraw_dist(0)
+    Game (World &w) :
+      level(0),
+      world(w),
+      done(false),
+      won(0),
+      redraw_dist(0)
     {
     }
 
@@ -853,9 +910,15 @@ class Game {
       done = true;
     }
 
-    virtual void start()
+    /* Set up local objects and settings for set difficulty level. */
+    virtual void init()
     {
       won = 0;
+    }
+
+    /* Clear out the world, then link everything in place. */
+    virtual void play()
+    {
       done = false;
     }
 
@@ -867,10 +930,6 @@ class Game {
       step();
       draw();
     }
-
-    virtual void on_joy_axis(int axis, double axis_val) {};
-    virtual void on_joy_button(int button, bool down) {};
-    virtual void on_key(int keysym, bool down) {};
 
     virtual void on_collision(Ufo &u, Ufo &v) {
       u.play_bump(min(1., 1./((u.pos - cam.from).len()))/3);
@@ -961,7 +1020,10 @@ class BlockSpace : public Game {
   public:
     double world_r;
     double max_block_size;
-    double blocks_count;
+    unsigned int blocks_count;
+
+    double v_drag;
+    double v_ang_drag;
 
     Fly fly;
     vector<FlyingBlock> debris;
@@ -975,23 +1037,54 @@ class BlockSpace : public Game {
       //redraw_dist = world_r * 2.;//10.0;
     }
 
-    virtual void start()
+    virtual void init_params()
     {
-      Game::start();
+      v_drag = 0;
+      v_ang_drag = 0;
 
+      world_r = 15. + cbrt(level);
+      blocks_count = (1./3) * (world_r * world_r * world_r) / (max_block_size * max_block_size * max_block_size);
+
+      fly.clear();
+    }
+
+    virtual void init()
+    {
+      Game::init();
+      init_params();
+      make_blocks();
+    }
+
+    void make_blocks()
+    {
       debris.resize(blocks_count);
       foreach(b, debris) {
         b->ori.rotate(Pt::random() * 2 * M_PI);
-        b->mass.v_ang = Pt::random() / 2;
+        b->mass.v = 0;
+        b->mass.v_ang = Pt::random();
         b->pos = Pt::random(-world_r, world_r);
         b->scale = Pt::random(max_block_size / 10, max_block_size);
 
         double dens = frandom(.5, 1.5);
         b->mass.m = dens * b->scale.volume();
+      }
+    }
 
+    virtual void add_lights()
+    {
+      world.lights.add_default_light();
+    }
+
+    virtual void play()
+    {
+      Game::play();
+
+      world.clear();
+      add_lights();
+
+      foreach(b, debris) {
         world.add(*b);
       }
-
       world.add(fly);
 
       osd_init();
@@ -999,9 +1092,26 @@ class BlockSpace : public Game {
 
     virtual void step()
     {
+      if ((fabs(v_drag) > 1e-6) || (fabs(v_ang_drag) > 1e-6)) {
+        double v_f = 1. - v_drag;
+        double v_ang_f = 1. - v_ang_drag;
+        foreach(u, world.ufos) {
+          (*u)->mass.v *= v_f;
+          (*u)->mass.v_ang *= v_ang_f;
+        }
+#if 0
+        fly.mass.v *= v_f;
+        fly.mass.v_ang *= v_ang_f;
+#endif
+      }
+
       collide();
 
-      world.wrap(fly.pos + fly.ori.nose * (world_r/2), world_r);
+      {
+        Pt wrap_center = fly.pos + fly.ori.nose * (world_r/2);
+        if (wrap_center.len() > 1)
+          world.wrap(wrap_center, world_r);
+      }
 
       Pt dir = fly.mass.v.unit();
       if (! dir.zero())
@@ -1014,16 +1124,6 @@ class BlockSpace : public Game {
                   fly.top_lag);
 
       osd_update();
-
-      static int skip = 0;
-      if ((skip ++) > 20) {
-        skip = 0;
-        printf("v=%5.2f p=",
-               fly.mass.v.len()
-              );
-        fly.pos.print();
-        (world.wrap_ofs + fly.pos).print();
-      }
     }
 
     /* OSD */
@@ -1148,32 +1248,32 @@ class BlockSpace : public Game {
       case SDLK_UP:
       case 'w':
       case 'k':
-        fly.roll_x = down? -.1 : 0;
+        fly.roll_x = down? -.2 : 0;
         break;
 
       case SDLK_LEFT:
       case 'a':
       case 'h':
-        fly.roll_y = down? .1 : 0;
+        fly.roll_y = down? .2 : 0;
         break;
 
       case SDLK_DOWN:
       case 's':
       case 'j':
-        fly.roll_x = down? .1 : 0;
+        fly.roll_x = down? .2 : 0;
         break;
 
       case SDLK_RIGHT:
       case 'd':
       case 'l':
-        fly.roll_y = down? -.1 : 0;
+        fly.roll_y = down? -.2 : 0;
         break;
 
       case 'q':
-        fly.roll_z = down? -.1 : 0;
+        fly.roll_z = down? -.2 : 0;
         break;
       case 'e':
-        fly.roll_z = down? .1 : 0;
+        fly.roll_z = down? .2 : 0;
         break;
 
       case SDLK_PAGEUP:
@@ -1206,9 +1306,24 @@ class MoveAllBlocks : public BlockSpace {
     MoveAllBlocks(World &w) :BlockSpace(w)
     {}
 
-    virtual void start()
+    virtual void init_params()
     {
-      BlockSpace::start();
+      BlockSpace::init_params();
+      world_r = min(15., 7. + level);
+
+      if (level == 0) {
+        blocks_count = 2;
+      }
+      else
+        blocks_count = min(blocks_count, (unsigned int)2 + 5 * level);
+
+      v_drag = .001 * level;
+      v_ang_drag = .001 * level;
+    }
+
+    virtual void init()
+    {
+      BlockSpace::init();
 
       for (int i = 0; i < debris.size(); i++) {
         FlyingBlock &b = debris[i];
@@ -1219,16 +1334,14 @@ class MoveAllBlocks : public BlockSpace {
           //b.scale = 1.0;
           //b.mass.m = 1;
         }
-        else
-        if (i == 1) {
-          b.pos.set(3, 3, -5);
-          b.mass.v.set(-2, -2, 0);
-          //b.scale = 1.001;
-          //b.mass.m = 1.5;
-        }
 
         color_grey(b, .1);
       }
+    }
+
+    virtual void play()
+    {
+      BlockSpace::play();
 
       move_osd_init();
     }
@@ -1258,11 +1371,6 @@ class MoveAllBlocks : public BlockSpace {
       BlockSpace::step();
 
       move_osd_update();
-
-      foreach(u, world.ufos) {
-        (*u)->mass.v *= .998;
-        (*u)->mass.v_ang *= .998;
-      }
     }
 
     virtual void on_collision(Ufo &u, Ufo &v) {
@@ -1330,42 +1438,306 @@ class MoveAllBlocks : public BlockSpace {
 };
 
 
+class TurnBlocksOn : public BlockSpace {
+  public:
+    bool fly_starts_on;
+    int off_count;
+
+    TurnBlocksOn(World &w) :
+      BlockSpace(w),
+      off_count(0),
+      fly_starts_on(true)
+    {}
+
+    void off(Ufo &b)
+    {
+      color_scheme(b, Pt(.5, .1, .1));
+      b.user_data = 0;
+      off_count ++;
+      b.mass.v_ang = 0;
+    }
+
+    void on(Ufo &b)
+    {
+      color_scheme(b, Pt(0, 1, 0));
+      b.user_data = (void*)1;
+      if (off_count)
+        off_count --;
+      b.mass.v_ang = 1;
+    }
+
+    void toggle(Ufo &b)
+    {
+      if (b.user_data)
+        off(b);
+      else
+        on(b);
+    }
+
+    virtual void init_params()
+    {
+      BlockSpace::init_params();
+
+      world_r = min(15., 7. + level);
+
+      if (level == 0) {
+        blocks_count = 2;
+        v_drag = .01;
+      }
+      else {
+        v_drag = .01 / (level * level);
+
+        blocks_count = min(blocks_count, (unsigned int)3 * level);
+      }
+      fly_starts_on = ! (blocks_count & 1);
+    }
+
+    virtual void init()
+    {
+      BlockSpace::init();
+
+      off_count = 0;
+      off(fly);
+      foreach(b, debris) {
+        b->mass.v = 0;
+        off(*b);
+      }
+
+      if (fly_starts_on)
+        on(fly);
+
+      for (int i = 0; i < debris.size(); i++) {
+        FlyingBlock &b = debris[i];
+
+        if (i == 0) {
+          b.pos.set(0, 0, -5);
+          b.scale = 1.0;
+          b.mass.m = 1;
+        }
+        else
+        if (i == 1) {
+          b.pos.set(3, 3, -5);
+          b.scale = 1.001;
+          b.mass.m = 1.5;
+        }
+        else
+        if (i == 2) {
+          b.pos.set(-2, -2, -5);
+          b.scale = 1.001;
+          b.mass.m = 1.5;
+        }
+        else
+          break;
+      }
+    }
+
+    virtual void play()
+    {
+      BlockSpace::play();
+      turnon_osd_init();
+    }
+
+    virtual void step()
+    {
+      if (off_count == 0)
+        win();
+
+      BlockSpace::step();
+
+      turnon_osd_update();
+    }
+
+    virtual void on_collision(Ufo &u, Ufo &v) {
+      BlockSpace::on_collision(u, v);
+      u.mass.v_ang = Pt::random();
+      v.mass.v_ang = Pt::random();
+      toggle(u);
+      toggle(v);
+    };
+
+
+    // OSD
+
+    int was_off_count;
+    double show_got_one;
+    FlyingBlock got_one;
+    FlyingBlock bar_all;
+    FlyingBlock bar_off;
+
+    void turnon_osd_init()
+    {
+      bar_all.pos.set(0, -.71, -1.004);
+      bar_all.scale.set(.0001 + 2., .03, .001);
+
+      bar_off.pos.set(0, -.71, -1.002);
+
+      got_one.pos.set(0, -.71, -1);
+      show_got_one = 0;
+
+      double c[][4] = {{.1, 0.7, .1, .4},};
+      bar_all.load_colors(c, ARRAY_SIZE(c));
+      double d[][4] = {{.7, 0.1, .1, .4},};
+      bar_off.load_colors(d, ARRAY_SIZE(c));
+
+      was_off_count = off_count;
+    }
+
+    void turnon_osd_update()
+    {
+      if (show_got_one > 0) {
+        show_got_one -= dt;
+        double c[][4] = {{.5, 1, .5, min(show_got_one, 1.)}, {.4, 1, .4, min(show_got_one, 1.)}};
+        got_one.load_colors(c, ARRAY_SIZE(c));
+      };
+      if (was_off_count != off_count) {
+        printf("left: %d of %d\n", off_count, world.ufos.size());
+        show_got_one = 1.1;
+        was_off_count = off_count;
+      }
+      bar_off.scale.set(.0001 + 2. * off_count / world.ufos.size(), .03, .001);
+      got_one.scale.set(.0001 + 2. * off_count / world.ufos.size(), .03, .001);
+    }
+
+    virtual void osd_draw()
+    {
+      BlockSpace::osd_draw();
+
+      bar_all.draw();
+      bar_off.draw();
+      if (show_got_one > 0) {
+        got_one.draw();
+      }
+    }
+};
+
+
 
 class FindTheLight : public BlockSpace {
   public:
-    Pt light_pos;
+    Pt absolute_light_pos;
 
     FindTheLight(World &w) :BlockSpace(w)
     {
     }
 
-    virtual void start()
+    virtual void init()
     {
-      light_pos = Pt::randoml(500, 600);
+      BlockSpace::init();
 
-      world.lights.clear();
+      if (level == 0)
+        absolute_light_pos.set(0, 0, -10);
+      else
+        absolute_light_pos = Pt::randoml(10 * level, 10 * level);
+
+      foreach (b, debris) {
+        b->mass.v = 0;
+        b->mass.v_ang = 0;
+      }
+      debris[0].mass.v_ang = 1;
+      debris[0].scale = 1;
+      debris[0].pos = absolute_light_pos;
+      color_scheme(debris[0], Pt(1));
+    }
+
+    virtual void add_lights()
+    {
       {
         Light &l = world.lights.add();
-        l.init(light_pos);
-        l.ambient(.8);
-        l.diffuse(1);
+        l.init(absolute_light_pos);
+        l.ambient(.0);
+        l.diffuse(0);
         l.specular(1);
         l.atten_quadr(.001);
       }
 
       {
         Light &l = world.lights.add();
-        l.init(light_pos);
-        l.ambient(.0);
-        l.diffuse(.1);
-        l.specular(0);
+        l.init(absolute_light_pos);
+        l.ambient(.001);
+        l.diffuse(.01);
+        l.specular(0.01);
+        l.atten_const(0.01);
       }
+    }
 
-      BlockSpace::start();
+    virtual void step()
+    {
+      BlockSpace::step();
+
+      if ((world.absolute_pos(fly.pos) - absolute_light_pos).len()
+          < (fly.radius() * 3))
+        win();
+
+      debris[0].pos = world.relative_pos(absolute_light_pos);
+      debris[0].mass.v = 0;
+      printf("\n");
     }
 
 };
 
+class Games {
+  public:
+    World world;
+
+    vector<Game *> games;
+    int active_idx;
+
+    Games()
+    {
+      games.push_back(new MoveAllBlocks(world));
+      games.push_back(new TurnBlocksOn(world));
+      games.push_back(new FindTheLight(world));
+
+      active_idx = 0;
+    }
+
+    ~Games()
+    {
+      foreach(i, games) {
+        Game *g = *i;
+        i = games.erase(i);
+        delete g;
+      }
+    }
+
+    Game &game()
+    {
+      return *games[active_idx];
+    }
+
+    void start()
+    {
+      foreach(i, games) {
+        Game *g = *i;
+        g->init();
+      }
+
+      game().play();
+    }
+
+    void next_game()
+    {
+      active_idx = (active_idx + 1) % games.size();
+      game().play();
+    }
+
+    void prev_game()
+    {
+      active_idx = (active_idx + games.size() - 1) % games.size();
+      game().play();
+    }
+
+    void run()
+    {
+      game().run();
+      if (game().done) {
+        game().level ++;
+        game().init();
+        game().play();
+      }
+    }
+
+};
 
 char *audio_path = NULL;
 
@@ -1544,12 +1916,10 @@ int main(int argc, char *argv[])
   Audio.start();
   //Audio.play(new Sine(140, 0.01));
 
-  World world;
+  Games games;
+  games.start();
 
-  MoveAllBlocks game(world);
-
-  game.start();
-  game.draw();
+  games.game().draw();
 
   Uint32 last_time = SDL_GetTicks();
   Uint32 current_time,elapsed_time;
@@ -1560,7 +1930,7 @@ int main(int argc, char *argv[])
 
   while (running)
   {
-    game.run();
+    games.run();
     frames_rendered ++;
 
     {
@@ -1585,15 +1955,15 @@ int main(int argc, char *argv[])
         {
 
         case SDL_JOYAXISMOTION:
-          game.on_joy_axis(event.jaxis.axis,
-                           ((double)event.jaxis.value) / 32768.);
+          games.game().on_joy_axis(event.jaxis.axis,
+                                   ((double)event.jaxis.value) / 32768.);
           break;
 
 
         case SDL_JOYBUTTONDOWN:
         case SDL_JOYBUTTONUP:
-          game.on_joy_button(event.jbutton.button,
-                             event.type == SDL_JOYBUTTONDOWN);
+          games.game().on_joy_button(event.jbutton.button,
+                                     event.type == SDL_JOYBUTTONDOWN);
           break;
 
         case SDL_JOYBALLMOTION:  /* Handle Joyball Motion */
@@ -1621,8 +1991,12 @@ int main(int argc, char *argv[])
               SDL_WM_ToggleFullScreen(screen);
               break;
 
+            case SDLK_TAB:
+              games.next_game();
+              break;
+
             default:
-              game.on_key(c, true);
+              games.game().on_key(c, true);
               break;
             }
           }
@@ -1631,7 +2005,7 @@ int main(int argc, char *argv[])
         case SDL_KEYUP:
           {
             int c = event.key.keysym.sym;
-            game.on_key(c, false);
+            games.game().on_key(c, false);
           }
           break;
         }
