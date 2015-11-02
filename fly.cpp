@@ -798,7 +798,7 @@ class Backdrop : public Visible {
       pos = 0;
       scale = 1e3;
 
-      make_sphere(*this, 4);
+      make_sphere(*this, 2);
 
       foreach (p, points) {
         p->t = p->uv();
