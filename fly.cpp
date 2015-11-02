@@ -1235,6 +1235,7 @@ class Game {
     /* Set up local objects and settings for set difficulty level. */
     virtual void init()
     {
+      level = max(0, 101 + level) % 101;
       won = 0;
     }
 
@@ -2325,6 +2326,23 @@ int main(int argc, char *argv[])
       {
         switch(event.type)
         {
+
+        case SDL_JOYHATMOTION:
+          printf("%d %d\n", event.jhat.hat, event.jhat.value);
+
+          switch (event.jhat.value) {
+          case 1:
+            games.game().level ++;
+            games.game().init();
+            games.game().play();
+            break;
+          case 4:
+            games.game().level --;
+            games.game().init();
+            games.game().play();
+            break;
+          }
+          break;
 
         case SDL_JOYAXISMOTION:
           games.game().on_joy_axis(event.jaxis.axis,
