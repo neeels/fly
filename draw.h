@@ -223,6 +223,15 @@ class Pt {
       return ma;
     }
 
+    Pt uv() const
+    {
+      Pt p = unit();
+      return Pt(
+                .5 + ( atan2(p.z, p.x) / (2.*M_PI) ),
+                .5 - ( asin(p.y) / M_PI ),
+                0);
+    }
+
     Pt& operator+=(const Pt &p) {
       x += p.x;
       y += p.y;
@@ -344,6 +353,11 @@ class Pt {
     void glScaled() const
     {
       ::glScaled(x, y, z);
+    }
+
+    void glTexCoord()
+    {
+      ::glTexCoord2d(x, y);
     }
 
     void print() const
@@ -632,11 +646,11 @@ class Color {
 };
 
 
-
 class Point : public Pt{
   public:
 
     Color c;
+    Pt t;
 
     Point() : Pt() {
       c.random();
@@ -655,18 +669,31 @@ class Point : public Pt{
       Pt::random();
       c.random();
     }
+
+    Point &operator=(const Pt &p)
+    {
+      Pt::operator=(p);
+      return *this;
+    }
 };
 
 
 class Texture {
   public:
+    bool loaded;
     GLuint id;
+    const char *path;
 
-    Texture() {}
+    Texture() :
+      loaded(false),
+      id(0)
+    {}
 
     void load(const char *path) {
+      this->path = path;
       id = load_texture(path, false);
-      printf("Loaded texture %x: %s\n", (int)id, path);
+      loaded = true;
+      printf("%p: Loaded texture %x: %s\n", this, (int)id, path);
     }
 
     void begin() {
@@ -676,6 +703,14 @@ class Texture {
 
     void end() {
       glDisable(GL_TEXTURE_2D);
+    }
+
+    bool operator == (const char *path)
+    {
+      return (this->path == path)
+        || ((this->path != NULL)
+            && (path != NULL)
+            && (strcmp(this->path, path) == 0));
     }
 };
 
@@ -769,12 +804,12 @@ class Draw {
       p.glVertex3d();
     }
 
-    static void color(Color &c) {
-      c.glColor();
+    static void color(Color &c, double opacity=1.) {
+      c.glColor(opacity);
     }
 
-    static void color_point(Point &p) {
-      color(p.c);
+    static void color_point(Point &p, double opacity=1.) {
+      color(p.c, opacity);
       point(p);
     }
 

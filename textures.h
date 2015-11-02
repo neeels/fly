@@ -9,7 +9,6 @@
 #endif
 
 
-SDL_Surface * flip_surface(SDL_Surface * surface);
 GLuint load_texture(const char * filename,bool useMipMap);
 SDL_Surface * flip_surface(SDL_Surface * surface);
 

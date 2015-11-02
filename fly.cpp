@@ -31,6 +31,21 @@ struct Face {
   unsigned int point_idx[Face::N];
   Pt n;
 
+  void set(unsigned int i0, unsigned int i1, unsigned int i2, const Pt &normal)
+  {
+    point_idx[0] = i0;
+    point_idx[1] = i1;
+    point_idx[2] = i2;
+    n = normal.unit();
+  }
+
+  void set(unsigned int i0, unsigned int i1, unsigned int i2, const vector<Point> &points)
+  {
+    Pt a = points[i1] - points[i0];
+    Pt b = points[i2] - points[i0];
+    set(i0, i1, i2, b.cross(a));
+  }
+
   void load(const unsigned int idxs[Face::N], const Pt &normal)
   {
     memcpy(point_idx, idxs, sizeof(point_idx));
@@ -239,6 +254,30 @@ struct Orientation {
   }
 };
 
+class Textures {
+  public:
+
+    vector<Texture> textures;
+
+    Texture *load(const char *path)
+    {
+      foreach(t, textures) {
+        if ((*t) == path)
+          return &(*t);
+      }
+
+      textures.resize(textures.size() + 1);
+      Texture &t = textures.back();
+      t.load(path);
+      if (! t.loaded)
+        return NULL;
+      printf("loaded %p\n", &t);
+      return &t;
+    }
+};
+
+Textures textures;
+
 class Visible {
   private:
     double _radius;
@@ -248,16 +287,27 @@ class Visible {
   public:
     vector<Point> points;
     vector<Face> faces;
+    Texture *texture;
     Pt scale;
     Pt pos;
     Orientation ori;
 
+    double hide;
+
     Visible()
       :scale(1, 1, 1),
        shape_changed(false),
-       _radius(0)
+       _radius(0),
+       hide(0),
+       texture(0)
     {
       scale.set(1, 1, 1);
+    }
+
+    void clear()
+    {
+      points.resize(0);
+      faces.resize(0);
     }
 
     Point &add_point()
@@ -273,8 +323,21 @@ class Visible {
       return faces.back();
     }
 
+    void color_scheme(const Pt &base_rgb=Pt::random(0.1, 1), double d=.02)
+    {
+      foreach (p, points) {
+        p->c = (base_rgb * frandom(1.-d, 1.+d)).set_min(1);
+      }
+    }
+
     void draw()
     {
+      double opacity = 1. - hide;
+      if (opacity < 1e-6)
+        return;
+
+      opacity = max(0., min(1., opacity));
+
       glPushMatrix();
 
       pos.glTranslated();
@@ -285,19 +348,47 @@ class Visible {
 #if DRAW_SPHERES
       glutSolidSphere(.5, 20, 16);
 #else
+      if (texture)
+        texture->begin();
+
       int l;
+
+#define LINE 0
+#if LINE
+
+      l = faces.size();
+      for (int i = 0; i < l; i++) {
+        Draw::begin(GL_LINE_STRIP);
+        Face &face = faces[i];
+        face.n.glNormal();
+        for (int j = 0; j < (Face::N    +1     ); j++) {
+          Point &p = points[face.point_idx[j%3]];
+          if (texture)
+            p.t.glTexCoord();
+          Draw::color_point(p, opacity);
+        }
+        Draw::end();
+      }
+#else
       Draw::begin(GL_TRIANGLES);
 
       l = faces.size();
       for (int i = 0; i < l; i++) {
         Face &face = faces[i];
         face.n.glNormal();
-        for (int j = 0; j < Face::N; j++) {
-          Draw::color_point(points[face.point_idx[j]]);
+        for (int j = 0; j < (Face::N); j++) {
+          Point &p = points[face.point_idx[j%3]];
+          if (texture)
+            p.t.glTexCoord();
+          Draw::color_point(p, opacity);
         }
       }
-
       Draw::end();
+#endif
+
+
+      if (texture)
+        texture->end();
 #endif
       glPopMatrix();
     }
@@ -348,7 +439,21 @@ class Visible {
       return (pos - v.pos).len() < (radius() + v.radius());
     }
 
+    Pt face_center(unsigned int face_idx) const
+    {
+      return face_center(faces[face_idx]);
+    }
+
   private:
+    Pt face_center(const Face &f) const
+    {
+      Pt c;
+      for (int i = 0; i < Face::N; i++) {
+        c += points[f.point_idx[i]];
+      }
+      return c / Face::N;
+    }
+
     void update_rotated_points()
     {
       if (rotated_ori != ori) {
@@ -363,8 +468,11 @@ class Visible {
     }
 };
 
-void make_block(Visible &v)
+void make_block(Visible &v, bool clear=true)
 {
+  if (clear)
+    v.clear();
+
   static double points[][3] = {
     {-.5, -.5,  .5},
     {-.5, -.5, -.5},
@@ -395,8 +503,11 @@ void make_block(Visible &v)
                faces, ARRAY_SIZE(faces));
 }
 
-void make_icosahedron(Visible &v)
+void make_icosahedron(Visible &v, bool clear=true)
 {
+  if (clear)
+    v.clear();
+
   // icosahedron facts...
   //
   // outer radius
@@ -480,13 +591,84 @@ void make_icosahedron(Visible &v)
 
   v.load_faces(points, ARRAY_SIZE(points),
                faces, ARRAY_SIZE(faces));
+
+  if (0)
+  foreach(p, v.points) {
+    *p = p->unit();
+  }
 }
 
-// colors
-void color_scheme(Visible &v, const Pt &base_rgb)
+void make_star(Visible &v, double ratio = 1.5, int n = 1)
 {
-  for (int i = 0; i < v.points.size(); i ++) {
-    v.points[i].c = (base_rgb * frandom(.8, 1.2)).set_min(1);
+  make_icosahedron(v);
+
+  foreach (p, v.points) {
+    *p /= ratio;
+  }
+
+  for (unsigned int ni = 0; ni < n; ni++) {
+
+    int faces_n = v.faces.size();
+    for (int fi = 0; fi < faces_n; fi++) {
+      Face &f = v.faces[fi];
+
+      v.add_point() = v.face_center(fi).unit() / 2;
+      int p = v.points.size() - 1;
+
+      int a = f.point_idx[0];
+      int b = f.point_idx[1];
+      int c = f.point_idx[2];
+
+      f.set(a, b, p, v.points);
+      v.add_face().set(b, c, p, v.points);
+      v.add_face().set(c, a, p, v.points);
+    }
+  }
+}
+
+void make_sphere(Visible &v, unsigned int n)
+{
+  make_icosahedron(v);
+
+  for (unsigned int ni = 0; ni < n; ni++) {
+
+    int faces_n = v.faces.size();
+    for (int fi = 0; fi < faces_n; fi++) {
+      Face &face = v.faces[fi];
+
+      /*
+                a p0                p0             a
+                 /\                /\             /\
+                /  \              /  \           /  \
+               /    \   ===>    p5----p3        f----d
+              /      \          / \  / \       / \  / \
+             /________\        /___\/___\     /___\/___\
+          c p2       b p1     p2    p4   p1  c    e    b
+       */
+
+      int a = face.point_idx[0];
+      int b = face.point_idx[1];
+      int c = face.point_idx[2];
+      Pt p0 = v.points[a];
+      Pt p1 = v.points[b];
+      Pt p2 = v.points[c];
+
+      Pt p3 = (p0 + p1).unit()/2;
+      Pt p4 = (p1 + p2).unit()/2;
+      Pt p5 = (p2 + p0).unit()/2;
+
+      v.add_point() = p3;
+      int d = v.points.size() - 1;
+      v.add_point() = p4;
+      int e = v.points.size() - 1;
+      v.add_point() = p5;
+      int f = v.points.size() - 1;
+
+      face.set(c, f, e, v.points);
+      v.add_face().set(f, a, d, v.points);
+      v.add_face().set(e, f, d, v.points);
+      v.add_face().set(e, d, b, v.points);
+    }
   }
 }
 
@@ -593,11 +775,58 @@ class Ufo : public Visible {
     }
 };
 
-class FlyingThing : public Ufo {
+void wrap_val(double &v, double ref)
+{
+  double d = v - ref;
+  if (d > .5)
+    v -= 1.;
+  else
+  if (d < -.5)
+    v += 1.;
+}
+
+void wrap_uv(Pt &uv, const Pt &rel)
+{
+  wrap_val(uv.x, rel.x);
+  wrap_val(uv.y, rel.y);
+}
+
+class Backdrop : public Visible {
   public:
-    FlyingThing() {
-      make_icosahedron(*this);
-      color_scheme(*this, Pt::random(0.1, 1));
+
+    Backdrop() {
+      pos = 0;
+      scale = 1e3;
+
+      make_sphere(*this, 4);
+
+      foreach (p, points) {
+        p->t = p->uv();
+        p->c = 1;
+        // reverse the faces so they go inward.
+        p->x = - p->x;
+      }
+
+      // wrap texture coordinates
+      foreach (f, faces) {
+        Point &p0 = points[f->point_idx[0]];
+
+        for (int pi = 1; pi < Face::N; pi++) {
+          Point &p = points[f->point_idx[pi]];
+          Pt t = p.t;
+          wrap_uv(t, p0.t);
+          if (t != p.t) {
+            Point &new_point = add_point();
+            new_point = p;
+            new_point.t = t;
+            int new_idx = points.size() - 1;
+            f->point_idx[pi] = new_idx;
+          }
+        }
+      }
+
+      //texture = textures.load("backdrop.jpg");
+      //texture = textures.load("test_backdrop.png");
     }
 };
 
@@ -640,7 +869,7 @@ class Fly : public Ufo {
     engines_strength = mass.m * 20;
 
     make_block(*this);
-    color_scheme(*this, Pt(.2, .6, .2));
+    color_scheme(Pt(.2, .6, .2));
 
     int l = points.size();
     for (int i = 0; i < l; i++) {
@@ -732,11 +961,13 @@ struct Camera {
   Pt at;
   Pt from;
   Pt top;
+  Backdrop backdrop;
 
   void look_at(const Pt &look_at, const Pt &from_rel, const Pt &top) {
     at = look_at;
     from = at + from_rel;
     this->top = top;
+    backdrop.pos = from;
   }
 
   void gluLookAt() {
@@ -826,6 +1057,13 @@ class Light {
       glLightf(id, GL_QUADRATIC_ATTENUATION, f);
     }
 
+    void atten(double consd=0, double lin=0, double quadr=0)
+    {
+      glLightf(id, GL_CONSTANT_ATTENUATION, consd);
+      glLightf(id, GL_LINEAR_ATTENUATION, lin);
+      glLightf(id, GL_QUADRATIC_ATTENUATION, quadr);
+    }
+
 };
 
 
@@ -848,8 +1086,7 @@ class Lights {
       l.ambient(.5);
       l.diffuse(1);
       l.specular(1);
-      l.atten_const(1);
-      l.atten_quadr(.0);
+      l.atten(1, 0, 0);
     }
 
     void step()
@@ -1030,6 +1267,10 @@ class Game {
       
       cam.gluLookAt();
 
+      glDisable(GL_LIGHTING);
+      cam.backdrop.draw();
+      glEnable(GL_LIGHTING);
+
       world.draw();
 
       if (redraw_dist > .1) {
@@ -1111,7 +1352,7 @@ class BlockSpace : public Game {
     double v_ang_drag;
 
     Fly fly;
-    vector<FlyingThing> debris;
+    vector<Ufo> debris;
 
     BlockSpace(World &w)
       : Game(w),
@@ -1138,12 +1379,16 @@ class BlockSpace : public Game {
       Game::init();
       init_params();
       make_blocks();
+      cam.backdrop.color_scheme(Pt(0x7f, 0xbf, 0xff)/255);
+      cam.backdrop.texture = NULL;
     }
 
     void make_blocks()
     {
       debris.resize(blocks_count);
       foreach(b, debris) {
+        make_block(*b);
+        b->color_scheme();
         b->ori.rotate(Pt::random() * 2 * M_PI);
         b->mass.v = 0;
         b->mass.v_ang = Pt::random();
@@ -1212,13 +1457,15 @@ class BlockSpace : public Game {
     }
 
     /* OSD */
-    FlyingThing speed;
+    Ufo speed;
     bool draw_want_speed;
-    FlyingThing want_speed;
+    Ufo want_speed;
 
     void osd_init()
     {
+      make_block(speed);
       speed.pos.set(0, -.68, -1);
+      make_block(want_speed);
       want_speed.pos = speed.pos - Pt(0, 0, .002);
     }
 
@@ -1411,7 +1658,7 @@ class MoveAllBlocks : public BlockSpace {
       BlockSpace::init();
 
       for (int i = 0; i < debris.size(); i++) {
-        FlyingThing &b = debris[i];
+        Ufo &b = debris[i];
         b.mass.v_ang = 0;
 
         if (i == 0) {
@@ -1462,8 +1709,8 @@ class MoveAllBlocks : public BlockSpace {
       BlockSpace::on_collision(u, v);
       u.mass.v_ang = Pt::random();
       v.mass.v_ang = Pt::random();
-      color_scheme(u, Pt::random(0.1, 1));
-      color_scheme(v, Pt::random(0.1, 1));
+      u.color_scheme();
+      v.color_scheme();
     };
 
 
@@ -1471,12 +1718,15 @@ class MoveAllBlocks : public BlockSpace {
 
     int was_inanimate;
     double show_got_one;
-    FlyingThing got_one;
-    FlyingThing bar_all;
-    FlyingThing bar_inanimate;
+    Ufo got_one;
+    Ufo bar_all;
+    Ufo bar_inanimate;
 
     void move_osd_init()
     {
+      make_block(got_one);
+      make_block(bar_all);
+      make_block(bar_inanimate);
       bar_all.pos.set(0, -.71, -1.004);
       bar_all.scale.set(.0001 + 2., .03, .001);
 
@@ -1522,12 +1772,12 @@ class MoveAllBlocks : public BlockSpace {
 };
 
 
-class TurnBlocksOn : public BlockSpace {
+class TurnAllOn : public BlockSpace {
   public:
     bool fly_starts_on;
     int off_count;
 
-    TurnBlocksOn(World &w) :
+    TurnAllOn(World &w) :
       BlockSpace(w),
       off_count(0),
       fly_starts_on(true)
@@ -1535,7 +1785,7 @@ class TurnBlocksOn : public BlockSpace {
 
     void off(Ufo &b)
     {
-      color_scheme(b, Pt(.5, .1, .1));
+      b.color_scheme(Pt(.5, .1, .1));
       b.user_data = 0;
       off_count ++;
       b.mass.v_ang = 0;
@@ -1543,11 +1793,11 @@ class TurnBlocksOn : public BlockSpace {
 
     void on(Ufo &b)
     {
-      color_scheme(b, Pt(0, 1, 0));
+      b.color_scheme(Pt(0, 1, 0));
       b.user_data = (void*)1;
       if (off_count)
         off_count --;
-      b.mass.v_ang = 1;
+      b.mass.v_ang = .1;
     }
 
     void toggle(Ufo &b)
@@ -1583,6 +1833,7 @@ class TurnBlocksOn : public BlockSpace {
       off_count = 0;
       off(fly);
       foreach(b, debris) {
+        make_icosahedron(*b);
         b->mass.v = 0;
         off(*b);
       }
@@ -1591,7 +1842,7 @@ class TurnBlocksOn : public BlockSpace {
         on(fly);
 
       for (int i = 0; i < debris.size(); i++) {
-        FlyingThing &b = debris[i];
+        Ufo &b = debris[i];
 
         if (i == 0) {
           b.pos.set(0, 0, -5);
@@ -1610,9 +1861,16 @@ class TurnBlocksOn : public BlockSpace {
           b.scale = 1.001;
           b.mass.m = 1.5;
         }
-        else
-          break;
+
+        b.scale = 1;
+        b.ori.clear();
+        //else
+         // break;
       }
+
+      cam.backdrop.color_scheme(Pt(1), 0);
+      //cam.backdrop.texture = textures.load("backdrop_clouds_2.jpg");
+      cam.backdrop.texture = textures.load("backdrop.jpg");
     }
 
     virtual void play()
@@ -1644,9 +1902,9 @@ class TurnBlocksOn : public BlockSpace {
 
     int was_off_count;
     double show_got_one;
-    FlyingThing got_one;
-    FlyingThing bar_all;
-    FlyingThing bar_off;
+    Ufo got_one;
+    Ufo bar_all;
+    Ufo bar_off;
 
     void turnon_osd_init()
     {
@@ -1703,6 +1961,11 @@ class FindTheLight : public BlockSpace {
     {
     }
 
+    Ufo &marker()
+    {
+      return debris.back();
+    }
+
     virtual void init()
     {
       BlockSpace::init();
@@ -1716,43 +1979,79 @@ class FindTheLight : public BlockSpace {
         b->mass.v = 0;
         b->mass.v_ang = 0;
       }
-      debris[0].mass.v_ang = 1;
-      debris[0].scale = 1;
-      debris[0].pos = absolute_light_pos;
-      color_scheme(debris[0], Pt(1));
+
+      Ufo &m = marker();
+
+      make_star(m, 1.5);
+
+      m.mass.v_ang = 1;
+      m.scale = 1;
+      m.pos = absolute_light_pos;
+      m.color_scheme(Pt(1), 0);
+
+      cam.backdrop.texture = textures.load("backdrop.jpg");
+      //cam.backdrop.texture = textures.load("test_backdrop.png");
+
+      if (cam.backdrop.texture)
+        cam.backdrop.color_scheme(Pt(1), 0);
+      else
+        cam.backdrop.color_scheme(Pt(.05));
     }
 
     virtual void add_lights()
     {
+      double intens = .3;
+      if (level > 0)
+        intens /= sqrt(level);
+
       {
         Light &l = world.lights.add();
-        l.init(absolute_light_pos);
-        l.ambient(.0);
-        l.diffuse(0);
-        l.specular(1);
-        l.atten_quadr(.001);
+        l.init(absolute_light_pos + Pt(1));
+        l.ambient(intens/5);
+        l.diffuse(intens);
+        l.specular(intens);
+        l.atten(0, 0, .01);
       }
 
       {
         Light &l = world.lights.add();
-        l.init(absolute_light_pos);
-        l.ambient(.001);
-        l.diffuse(.01);
-        l.specular(0.01);
-        l.atten_const(0.01);
+        l.init(absolute_light_pos - Pt(1));
+        l.ambient(intens/5);
+        l.diffuse(intens);
+        l.specular(intens);
+        l.atten(0, 0, .01);
+      }
+
+      {
+        Light &l = world.lights.add();
+        l.init(absolute_light_pos + Pt(1, -1, 1));
+        l.ambient(.0);
+        l.diffuse(.1);
+        l.specular(0);
+        l.atten_const(0.8);
       }
     }
+
+    virtual void on_collision(Ufo &u, Ufo &v) {
+      u.play_bump(min(1., 1./((u.pos - cam.from).len()))/3);
+      v.play_bump(min(1., 1./((v.pos - cam.from).len()))/3);
+      Ufo &m = marker();
+      if ( ( (&u == &fly) || (&v == &fly) )
+           && ( ( (&u == &m) || (&v == &m) )) )
+        win();
+    };
 
     virtual void step()
     {
       BlockSpace::step();
 
-      if ((world.absolute_pos(fly.pos) - absolute_light_pos).len()
-          < (fly.radius() * 3))
-        win();
+      Ufo &m = marker();
 
-      debris[0].pos = world.relative_pos(absolute_light_pos);
-      debris[0].mass.v = 0;
+      m.pos = world.relative_pos(absolute_light_pos);
+      m.mass.v = 0;
+
+      double d = (m.pos - cam.from).len();
+      m.hide = d / (world_r);
     }
 
 };
@@ -1766,9 +2065,9 @@ class Games {
 
     Games()
     {
-      games.push_back(new MoveAllBlocks(world));
-      games.push_back(new TurnBlocksOn(world));
       games.push_back(new FindTheLight(world));
+      games.push_back(new TurnAllOn(world));
+      games.push_back(new MoveAllBlocks(world));
 
       active_idx = 0;
     }
@@ -2040,6 +2339,10 @@ int main(int argc, char *argv[])
           }
           if (event.jbutton.button == 5) {
             games.next_game();
+          }
+          if (event.jbutton.button == 7) {
+            games.game().init();
+            games.game().play();
           }
         case SDL_JOYBUTTONUP:
           games.game().on_joy_button(event.jbutton.button,
