@@ -1,5 +1,8 @@
 #pragma once
 
+#include <stdlib.h>
+#include <time.h>
+
 #define ARRAY_SIZE(X) (sizeof(X)/sizeof(*X))
 
 /*  vector<Moo> goo;

@@ -678,43 +678,6 @@ class Point : public Pt{
 };
 
 
-class Texture {
-  public:
-    bool loaded;
-    GLuint id;
-    const char *path;
-
-    Texture() :
-      loaded(false),
-      id(0)
-    {}
-
-    void load(const char *path) {
-      this->path = path;
-      id = load_texture(path, false);
-      loaded = true;
-      printf("%p: Loaded texture %x: %s\n", this, (int)id, path);
-    }
-
-    void begin() {
-      glEnable(GL_TEXTURE_2D);
-      glBindTexture(GL_TEXTURE_2D, id);
-    }
-
-    void end() {
-      glDisable(GL_TEXTURE_2D);
-    }
-
-    bool operator == (const char *path)
-    {
-      return (this->path == path)
-        || ((this->path != NULL)
-            && (path != NULL)
-            && (strcmp(this->path, path) == 0));
-    }
-};
-
-
 
 class FilterContext {
   public:

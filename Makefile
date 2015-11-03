@@ -15,6 +15,9 @@ fly: fly.cpp palettes.h palettes.o ctrl_layers.h textures.o font.h draw.h foreac
 palettes.o: palettes.h palettes.c
 	gcc $F -c -o palettes.o palettes.c
 
+%.o: %.cpp
+	g++ $F -c $< 
+
 %: %.cpp
 	g++ $F -o $* $< -lGL -lGLU -lSDL -lm
 

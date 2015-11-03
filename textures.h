@@ -1,17 +1,59 @@
-#ifndef TEXTURES_H
-#define TEXTURES_H
+#pragma once
+
+
+#include <vector>
+using namespace std;
 
 #include <GL/gl.h>
 #include <SDL/SDL.h>
 
-#ifndef GL_CLAMP_TO_EDGE
-#define GL_CLAMP_TO_EDGE 0x812F
-#endif
+#include "foreach.h"
+
+class Texture {
+  public:
+    bool loaded;
+    GLuint id;
+    const char *path;
+
+    Texture() :
+      loaded(false),
+      id(0)
+    {}
+
+    void begin() {
+      glEnable(GL_TEXTURE_2D);
+      glBindTexture(GL_TEXTURE_2D, id);
+    }
+
+    void end() {
+      glDisable(GL_TEXTURE_2D);
+    }
+
+    bool operator == (const char *path)
+    {
+      return (this->path == path)
+        || ((this->path != NULL)
+            && (path != NULL)
+            && (strcmp(this->path, path) == 0));
+    }
+
+    /* rather invoke via Textures::load(). */
+    bool load(GLuint id, const char *path, bool use_mip_map=false);
+};
 
 
-GLuint load_texture(const char * filename,bool useMipMap);
-SDL_Surface * flip_surface(SDL_Surface * surface);
 
-void drawAxis(double scale);
+class Textures {
+  private:
+    Textures() {}
 
-#endif //TEXTURES_H
+  public:
+
+    /* Before setting up textures, OpenGL needs to know how many there will
+     * be... */
+    Textures(int n);
+    Texture *load(const char *path);
+
+    vector<Texture> textures;
+};
+

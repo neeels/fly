@@ -6,80 +6,117 @@
 #include <cstring>
 #include <cstdlib>
 
-SDL_Surface * flip_surface(SDL_Surface * surface);
-
-GLuint load_texture(const char * filename, bool useMipMap)
-{
-    GLuint glID;
-    SDL_Surface * picture_surface = NULL;
-    SDL_Surface *gl_surface = NULL;
-    SDL_Surface * gl_flipped_surface = NULL;
-    Uint32 rmask, gmask, bmask, amask;
-
-    picture_surface = IMG_Load(filename);
-    if (picture_surface == NULL) {
-      printf("Failed to load %s\n", filename);
-      return 0;
-    }
-
-#if SDL_BYTEORDER == SDL_BIG_ENDIAN
-
-    rmask = 0xff000000;
-    gmask = 0x00ff0000;
-    bmask = 0x0000ff00;
-    amask = 0x000000ff;
-#else
-
-    rmask = 0x000000ff;
-    gmask = 0x0000ff00;
-    bmask = 0x00ff0000;
-    amask = 0xff000000;
+#if 0
+#ifndef GL_CLAMP_TO_EDGE
+#define GL_CLAMP_TO_EDGE 0x812F
+#endif
 #endif
 
-    SDL_PixelFormat format = *(picture_surface->format);
-    format.BitsPerPixel = 32;
-    format.BytesPerPixel = 4;
-    format.Rmask = rmask;
-    format.Gmask = gmask;
-    format.Bmask = bmask;
-    format.Amask = amask;
+GLuint load_texture(const char * filename,bool useMipMap);
+SDL_Surface * flip_surface(SDL_Surface * surface);
 
-    gl_surface = SDL_ConvertSurface(picture_surface, &format, SDL_SWSURFACE);
+bool Texture::load(GLuint id, const char *path, bool use_mip_map)
+{
+  SDL_Surface * picture_surface = NULL;
+  picture_surface = IMG_Load(path);
+  if (picture_surface == NULL) {
+    printf("Failed to load %s\n", path);
+    return false;
+  }
 
-    gl_flipped_surface = flip_surface(gl_surface);
+  Uint32 rmask, gmask, bmask, amask;
+#if SDL_BYTEORDER == SDL_BIG_ENDIAN
+  rmask = 0xff000000;
+  gmask = 0x00ff0000;
+  bmask = 0x0000ff00;
+  amask = 0x000000ff;
+#else
+  rmask = 0x000000ff;
+  gmask = 0x0000ff00;
+  bmask = 0x00ff0000;
+  amask = 0xff000000;
+#endif
 
-    glGenTextures(1, &glID);
+  SDL_PixelFormat format = *(picture_surface->format);
+  format.BitsPerPixel = 32;
+  format.BytesPerPixel = 4;
+  format.Rmask = rmask;
+  format.Gmask = gmask;
+  format.Bmask = bmask;
+  format.Amask = amask;
 
-    glBindTexture(GL_TEXTURE_2D, glID);
+  SDL_Surface *gl_surface;
+  gl_surface = SDL_ConvertSurface(picture_surface, &format, SDL_SWSURFACE);
 
+  SDL_Surface *gl_flipped_surface;
+  gl_flipped_surface = flip_surface(gl_surface);
 
-    if (useMipMap)
-    {
+  glBindTexture(GL_TEXTURE_2D, id);
 
-        gluBuild2DMipmaps(GL_TEXTURE_2D, 4, gl_flipped_surface->w,
-                          gl_flipped_surface->h, GL_RGBA,GL_UNSIGNED_BYTE,
-                          gl_flipped_surface->pixels);
+  if (use_mip_map)
+  {
+    gluBuild2DMipmaps(GL_TEXTURE_2D, 4, gl_flipped_surface->w,
+                      gl_flipped_surface->h, GL_RGBA,GL_UNSIGNED_BYTE,
+                      gl_flipped_surface->pixels);
 
-        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,
-                        GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,
+                    GL_LINEAR_MIPMAP_LINEAR);
+  }
+  else
+  {
+    glTexImage2D(GL_TEXTURE_2D, 0, 4, gl_flipped_surface->w,
+                 gl_flipped_surface->h, 0, GL_RGBA,GL_UNSIGNED_BYTE,
+                 gl_flipped_surface->pixels);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  }
+  glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
 
-    }
-    else
-    {
-        glTexImage2D(GL_TEXTURE_2D, 0, 4, gl_flipped_surface->w,
-                     gl_flipped_surface->h, 0, GL_RGBA,GL_UNSIGNED_BYTE,
-                     gl_flipped_surface->pixels);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    }
-    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+  SDL_FreeSurface(gl_flipped_surface);
+  SDL_FreeSurface(gl_surface);
+  SDL_FreeSurface(picture_surface);
 
-
-    SDL_FreeSurface(gl_flipped_surface);
-    SDL_FreeSurface(gl_surface);
-    SDL_FreeSurface(picture_surface);
-
-    return glID;
+  this->id = id;
+  this->path = path;
+  loaded = true;
+  printf("%p: Loaded texture %x: %s\n", this, (int)id, path);
 }
+
+Textures::Textures(int n)
+{
+  textures.resize(n);
+  GLuint id[n];
+  glGenTextures(n, id);
+
+  for (int i = 0; i < n; i++) {
+    textures[i].id = id[i];
+  }
+}
+
+Texture *Textures::load(const char *path)
+{
+  Texture *first_empty = NULL;
+
+  foreach(t, textures) {
+    if (!(t->loaded)) {
+      if (! first_empty)
+        first_empty = &(*t);
+      continue;
+    }
+    if ((*t) == path)
+      return &(*t);
+  }
+
+  if (! first_empty) {
+    printf("Out of textures! (%d)\n", textures.size());
+    return NULL;
+  }
+
+  Texture &t = *first_empty;
+  t.load(t.id, path);
+
+  return &t;
+}
+
 
 int takeScreenshot(const char * filename)
 {

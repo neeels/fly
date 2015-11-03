@@ -254,29 +254,7 @@ struct Orientation {
   }
 };
 
-class Textures {
-  public:
-
-    vector<Texture> textures;
-
-    Texture *load(const char *path)
-    {
-      foreach(t, textures) {
-        if ((*t) == path)
-          return &(*t);
-      }
-
-      textures.resize(textures.size() + 1);
-      Texture &t = textures.back();
-      t.load(path);
-      if (! t.loaded)
-        return NULL;
-      printf("loaded %p\n", &t);
-      return &t;
-    }
-};
-
-Textures textures;
+Textures textures(5);
 
 class Visible {
   private:
@@ -292,13 +270,13 @@ class Visible {
     Pt pos;
     Orientation ori;
 
-    double hide;
+    double opacity;
 
     Visible()
       :scale(1, 1, 1),
        shape_changed(false),
        _radius(0),
-       hide(0),
+       opacity(1),
        texture(0)
     {
       scale.set(1, 1, 1);
@@ -332,7 +310,7 @@ class Visible {
 
     void draw()
     {
-      double opacity = 1. - hide;
+      double opacity = this->opacity;
       if (opacity < 1e-6)
         return;
 
@@ -767,9 +745,9 @@ class Ufo : public Visible {
       double l = scale.len();
 
       Mix *m = new Mix();
-      m->add(new Sine(dens*100./max(.01,scale.x/l), vol/2, frandom()*2.*M_PI));
-      m->add(new Sine(dens*100./max(.01,scale.y/l), vol/2, frandom()*2.*M_PI));
-      m->add(new Sine(dens*100./max(.01,scale.z/l), vol/2, frandom()*2.*M_PI));
+      m->add(new Sine(dens*100./max(.01,scale.x/l), vol, frandom()*2.*M_PI));
+      m->add(new Sine(dens*100./max(.01,scale.y/l), vol, frandom()*2.*M_PI));
+      m->add(new Sine(dens*100./max(.01,scale.z/l), vol, frandom()*2.*M_PI));
 
       Audio.play(new Envelope(max(.01,.02/dens), max(.01,.03/dens), max(.01,1./dens), m));
     }
@@ -1197,6 +1175,7 @@ class Game {
     int level;
     World &world;
     Camera cam;
+    double r_visible;
     bool done;
     int won;
     double redraw_dist;
@@ -1204,6 +1183,7 @@ class Game {
     Game (World &w) :
       level(0),
       world(w),
+      r_visible(15),
       done(false),
       won(0),
       redraw_dist(0)
@@ -1232,11 +1212,18 @@ class Game {
       done = true;
     }
 
+    virtual void init_params()
+    {
+      level = max(0, 101 + level) % 101;
+      printf("L %d\n", level);
+    }
+
     /* Set up local objects and settings for set difficulty level. */
     virtual void init()
     {
-      level = max(0, 101 + level) % 101;
+      init_params();
       won = 0;
+      init_gl();
     }
 
     /* Clear out the world, then link everything in place. */
@@ -1259,6 +1246,26 @@ class Game {
       v.play_bump(min(1., 1./((v.pos - cam.from).len()))/3);
     };
 
+    void init_gl()
+    {
+      glMatrixMode( GL_PROJECTION );
+      glLoadIdentity();
+      gluPerspective(80, (double)W/H, .5, r_visible);
+
+      glClearColor (0.0, 0.0, 0.0, 0.0);
+      glShadeModel (GL_SMOOTH);
+
+      glColorMaterial ( GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE ) ;
+      glEnable(GL_COLOR_MATERIAL);
+      glEnable(GL_NORMALIZE);
+
+      glEnable(GL_DEPTH_TEST);
+      glEnable(GL_BLEND);
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      glMatrixMode( GL_MODELVIEW );
+    }
+
+
     void draw_scene()
     {
       glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
@@ -1269,7 +1276,9 @@ class Game {
       cam.gluLookAt();
 
       glDisable(GL_LIGHTING);
+      glDisable(GL_DEPTH_TEST);
       cam.backdrop.draw();
+      glEnable(GL_DEPTH_TEST);
       glEnable(GL_LIGHTING);
 
       world.draw();
@@ -1345,7 +1354,8 @@ class Game {
 
 class BlockSpace : public Game {
   public:
-    double world_r;
+    double r_wrap;
+    double r_action;
     double max_block_size;
     unsigned int blocks_count;
 
@@ -1357,7 +1367,8 @@ class BlockSpace : public Game {
 
     BlockSpace(World &w)
       : Game(w),
-        world_r(15),
+        r_wrap(30),
+        r_action(10),
         max_block_size(2),
         blocks_count(23)
     {
@@ -1366,11 +1377,15 @@ class BlockSpace : public Game {
 
     virtual void init_params()
     {
+      Game::init_params();
+
       v_drag = 0;
       v_ang_drag = 0;
 
-      world_r = 15. + cbrt(level);
-      blocks_count = (1./3) * (world_r * world_r * world_r) / (max_block_size * max_block_size * max_block_size);
+      r_wrap = 10. * r_action;
+      r_visible = 1000;
+
+      blocks_count = (1./3) * (r_action * r_action * r_action) / (max_block_size * max_block_size * max_block_size);
 
       fly.clear();
     }
@@ -1378,7 +1393,6 @@ class BlockSpace : public Game {
     virtual void init()
     {
       Game::init();
-      init_params();
       make_blocks();
       cam.backdrop.color_scheme(Pt(0x7f, 0xbf, 0xff)/255);
       cam.backdrop.texture = NULL;
@@ -1393,7 +1407,7 @@ class BlockSpace : public Game {
         b->ori.rotate(Pt::random() * 2 * M_PI);
         b->mass.v = 0;
         b->mass.v_ang = Pt::random();
-        b->pos = Pt::random(-world_r, world_r);
+        b->pos = Pt::random(-r_action, r_action);
         b->scale = Pt::random(max_block_size / 10, max_block_size);
 
         double dens = frandom(.5, 1.5);
@@ -1439,9 +1453,9 @@ class BlockSpace : public Game {
       collide();
 
       {
-        Pt wrap_center = fly.pos + fly.ori.nose * (world_r/2);
+        Pt wrap_center = fly.pos;
         if (wrap_center.len() > 1)
-          world.wrap(wrap_center, world_r);
+          world.wrap(wrap_center, r_wrap);
       }
 
       Pt dir = fly.mass.v.unit();
@@ -1641,8 +1655,8 @@ class MoveAllBlocks : public BlockSpace {
 
     virtual void init_params()
     {
+      r_action = 5. + .3 * level;
       BlockSpace::init_params();
-      world_r = min(15., 7. + level);
 
       if (level == 0) {
         blocks_count = 2;
@@ -1650,8 +1664,8 @@ class MoveAllBlocks : public BlockSpace {
       else
         blocks_count = min(blocks_count, (unsigned int)2 + 5 * level);
 
-      v_drag = .001 * level;
-      v_ang_drag = .001 * level;
+      v_drag = .00003 * level;
+      v_ang_drag = .00003 * level;
     }
 
     virtual void init()
@@ -1798,7 +1812,7 @@ class TurnAllOn : public BlockSpace {
       b.user_data = (void*)1;
       if (off_count)
         off_count --;
-      b.mass.v_ang = .1;
+      b.mass.v_ang = .7;
     }
 
     void toggle(Ufo &b)
@@ -1811,9 +1825,8 @@ class TurnAllOn : public BlockSpace {
 
     virtual void init_params()
     {
+      r_action = 5. + .3 * level;
       BlockSpace::init_params();
-
-      world_r = min(15., 7. + level);
 
       if (level == 0) {
         blocks_count = 2;
@@ -1870,8 +1883,8 @@ class TurnAllOn : public BlockSpace {
       }
 
       cam.backdrop.color_scheme(Pt(1), 0);
-      //cam.backdrop.texture = textures.load("backdrop_clouds_2.jpg");
-      cam.backdrop.texture = textures.load("backdrop.jpg");
+      cam.backdrop.texture = textures.load("backdrop_siegessaeule.jpg");
+      //cam.backdrop.texture = textures.load("backdrop.jpg");
     }
 
     virtual void play()
@@ -1897,6 +1910,18 @@ class TurnAllOn : public BlockSpace {
       toggle(u);
       toggle(v);
     };
+
+    virtual void add_lights()
+    {
+      {
+        Light &l = world.lights.add();
+        l.init(Pt(0, 200, 1000));
+        l.ambient(.5);
+        l.diffuse(1);
+        l.specular(1);
+        l.atten(1, 0, 0);
+      }
+    }
 
 
     // OSD
@@ -1965,6 +1990,15 @@ class FindTheLight : public BlockSpace {
     Ufo &marker()
     {
       return debris.back();
+    }
+
+    virtual void init_params()
+    {
+      r_action = 20.;
+      BlockSpace::init_params();
+      r_wrap = r_action;
+      blocks_count = 152. - (150. * level)/100;
+      printf("level %d blocks_count %d\n", level, blocks_count);
     }
 
     virtual void init()
@@ -2052,7 +2086,7 @@ class FindTheLight : public BlockSpace {
       m.mass.v = 0;
 
       double d = (m.pos - cam.from).len();
-      m.hide = d / (world_r);
+      m.opacity = 3. - 2. * (1. + .2 * sqrt(level)) * d / r_wrap;
     }
 
 };
@@ -2265,22 +2299,6 @@ int main(int argc, char *argv[])
   SDL_WM_SetCaption("fly", NULL);
   screen = SDL_SetVideoMode(W,H, 32, SDL_OPENGL);// | SDL_FULLSCREEN);
   SDL_ShowCursor(SDL_DISABLE);
-
-  glMatrixMode( GL_PROJECTION );
-  glLoadIdentity();
-  gluPerspective(80, (double)W/H, .5, 1000);
-
-  glClearColor (0.0, 0.0, 0.0, 0.0);
-  glShadeModel (GL_SMOOTH);
-
-  glColorMaterial ( GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE ) ;
-  glEnable(GL_COLOR_MATERIAL);
-  glEnable(GL_NORMALIZE);
-
-  glEnable(GL_DEPTH_TEST);
-  glEnable(GL_BLEND);
-  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-  glMatrixMode( GL_MODELVIEW );
 
 
   printf("seed %d\n", (int)ip.random_seed);

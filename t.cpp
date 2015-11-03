@@ -54,7 +54,8 @@ class Animation {
     double palette_blend;
     bool stop_palette_transition;
 
-    Texture dot;
+		Textures textures;
+    Texture *dot;
 
     vector<Cloud> clouds;
 
@@ -76,7 +77,7 @@ class Animation {
     Revolve revolve;
 
 
-    Animation() {
+    Animation() : textures(1) {
       is_palette = &palettes[0];
       want_palette = is_palette;
 
@@ -87,7 +88,9 @@ class Animation {
       make_palette(&blended_palette, PALETTE_LEN,
                    palette_defs[0]);
 
-      as_texture_planes.texture = &dot;
+      dot = textures.load("images/dot_white_200.png");
+      //dot.load("images/metal091.jpg");
+      as_texture_planes.texture = dot;
 
       dragon_points = 52;
       dragon_points.slew = 0;
@@ -202,8 +205,6 @@ class Animation {
     }
 
     void load() {
-      dot.load("images/dot_white_200.png");
-      //dot.load("images/metal091.jpg");
     }
 
     void step() {
