@@ -1,6 +1,5 @@
 #include "textures.h"
-#include <SDL/SDL.h>
-#include <SDL/SDL_image.h>
+#include <SDL2/SDL_image.h>
 #include <GL/glu.h>
 
 #include <cstring>
@@ -51,6 +50,9 @@ bool Texture::load(GLuint id, const char *path, bool use_mip_map)
   SDL_Surface *gl_flipped_surface;
   gl_flipped_surface = flip_surface(gl_surface);
 
+  this->native_w = gl_flipped_surface->w;
+  this->native_h = gl_flipped_surface->h;
+
   glBindTexture(GL_TEXTURE_2D, id);
 
   if (use_mip_map)
@@ -78,11 +80,11 @@ bool Texture::load(GLuint id, const char *path, bool use_mip_map)
   this->id = id;
   this->path = path;
   loaded = true;
-  printf("%p: Loaded texture %x: %s\n", this, (int)id, path);
 }
 
 Textures::Textures(int n)
 {
+	printf("Initializing %d textures\n", n);
   textures.resize(n);
   GLuint id[n];
   glGenTextures(n, id);
@@ -94,8 +96,10 @@ Textures::Textures(int n)
 
 Texture *Textures::load(const char *path)
 {
+	static int out_of_textures = 0;
   Texture *first_empty = NULL;
 
+	if (!out_of_textures) { // HACK only when sure that no texture is used twice
   foreach(t, textures) {
     if (!(t->loaded)) {
       if (! first_empty)
@@ -105,14 +109,22 @@ Texture *Textures::load(const char *path)
     if ((*t) == path)
       return &(*t);
   }
+	}
 
   if (! first_empty) {
-    printf("Out of textures! (%d)\n", textures.size());
+		out_of_textures ++;
+    printf("Out of textures! (%d + %d)\n", textures.size(), out_of_textures);
     return NULL;
   }
 
   Texture &t = *first_empty;
   t.load(t.id, path);
+
+  if (t.loaded) {
+    static int count = 0; // ick!
+    count ++;
+    printf("%p: Loaded texture nr %d (id=%d): %s\n", &t, count, (int)t.id, path);
+  }
 
   return &t;
 }

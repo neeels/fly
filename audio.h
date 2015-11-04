@@ -174,7 +174,7 @@ public:
     freq = audio_spec.freq;
 
     next();
-    render_thread_token = SDL_CreateThread(Audio_render_thread, NULL);
+    render_thread_token = SDL_CreateThread(Audio_render_thread, "audio", NULL);
     //gc_thread_token = SDL_CreateThread(Audio_gc_thread, NULL);
     SDL_PauseAudio(0);
     return true;
@@ -319,6 +319,23 @@ void _Audio::gc()
   playing.gc();
   SDL_SemPost(change_playing_mutex);
 }
+
+double audible(double freq, double maxf=880, double minf=50)
+{
+  if (freq < 1e-6)
+    return minf;
+  if (freq < minf)
+    return freq * ceil(minf/freq);
+  if (freq > maxf)
+    return freq / ceil(freq/maxf);
+  return freq;
+}
+
+double octave(double freq, int octaves=1, double base=220)
+{
+  return audible(freq, base * (octaves + 1), base);
+}
+
 
 class Sine : public Sound {
   public:

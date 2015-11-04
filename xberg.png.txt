@@ -1,0 +1,3 @@
+geo:52.5073,13.4298?z=13
+http://www.openstreetmap.org/#map=13/52.5073/13.4298
+share png 1:25500

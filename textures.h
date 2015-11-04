@@ -5,7 +5,7 @@
 using namespace std;
 
 #include <GL/gl.h>
-#include <SDL/SDL.h>
+#include <SDL2/SDL.h>
 
 #include "foreach.h"
 
@@ -14,6 +14,7 @@ class Texture {
     bool loaded;
     GLuint id;
     const char *path;
+    int native_w, native_h;
 
     Texture() :
       loaded(false),

@@ -1,4 +1,4 @@
-#include <SDL/SDL.h>
+#include <SDL2/SDL.h>
 #include <GL/gl.h>
 #include <GL/glu.h>
 #include <cstdlib>
@@ -15,380 +15,7 @@ using namespace std;
 #include "palettes.h"
 #include "textures.h"
 #include "foreach.h"
-
-double frandom(void) {
-  return (double)(random()) / INT_MAX;
-}
-
-double frandom(double _min, double _max) {
-  return _min + (_max - _min) * frandom();
-}
-
-class Pt {
-  public:
-
-    double x;
-    double y;
-    double z;
-
-    Pt() {
-      set(0,0,0);
-    }
-
-    Pt(double v) {
-      set(v, v, v);
-    }
-
-    Pt(double x, double y, double z) {
-      set(x, y, z);
-    }
-
-    void set(double x, double y, double z) {
-      this->x = x;
-      this->y = y;
-      this->z = z;
-    }
-
-    void load(const double coords[3]) {
-      x = coords[0];
-      y = coords[1];
-      z = coords[2];
-    }
-
-    static Pt randoml(double min_len=0, double max_len=1)
-    {
-      Pt r = random();
-      return r.unit(Pt(1, 0, 0)) * (min_len + (max_len - min_len) * frandom());
-    }
-
-    static Pt random(double min_c=-1, double max_c=1)
-    {
-      return Pt(min_c + (max_c - min_c) * frandom(),
-                min_c + (max_c - min_c) * frandom(),
-                min_c + (max_c - min_c) * frandom());
-    }
-
-    bool zero() const {
-      return (!x) && (!y) && (!z);
-    }
-
-    double len() const {
-      return sqrt(x*x + y*y + z*z);
-    }
-
-    double volume() const {
-      return fabs(x * y * z);
-    }
-
-    Pt unit(const Pt &if_zero=Pt()) const {
-      double l = len();
-      if (l < 1.e-6)
-        return if_zero;
-      return (*this) / l;
-    }
-
-    void rot_about(const Pt &axis, double rad) {
-#if 1
-      Pt u = axis.unit();
-      double cos_rad = cos(rad);
-      double sin_rad = sin(rad);
-      *this =
-        u * (dot(u) * (1. - cos_rad))
-        + (*this)*cos_rad
-        + u.cross(*this) * sin_rad;
-#else
-      double xx, yy, zz;
-      double l = axis.len();
-      double u = axis.x / l;
-      double v = axis.y / l;
-      double w = axis.z / l;
-      double cos_rad = cos(rad);
-      double sin_rad = sin(rad);
-      double f1 = (u*x + v*y + w*z)*(-cos_rad + 1);
-      xx = u*f1 + x*cos_rad + (- w*y + v*z)*sin_rad;
-      yy = v*f1 + y*cos_rad + (  w*x - u*z)*sin_rad;
-      zz = w*f1 + z*cos_rad + (- v*x + u*y)*sin_rad;
-      x = xx;
-      y = yy;
-      z = zz;
-#endif
-    }
-
-    /* Euler vector: rotate about given vector by the length of the vector in
-     * radians. */
-    void rot_e(const Pt &e) {
-      double rad = e.len();
-      if (fabs(rad) < 1e-6)
-        return;
-      Pt u = e / rad;
-      double cos_rad = cos(rad);
-      double sin_rad = sin(rad);
-      *this =
-        u * (dot(u) * (1. - cos_rad))
-        + (*this)*cos_rad
-        + u.cross(*this) * sin_rad;
-    }
-
-
-    void scale3(Pt &p) {
-      x *= p.x;
-      y *= p.y;
-      z *= p.z;
-    }
-
-    Pt &set_min(double c) {
-      x = min(x, c);
-      y = min(y, c);
-      z = min(z, c);
-      return *this;
-    }
-
-    void set_min(Pt &p) {
-      x = min(x, p.x);
-      y = min(y, p.y);
-      z = min(z, p.z);
-    }
-
-    void set_max(Pt &p) {
-      x = max(x, p.x);
-      y = max(y, p.y);
-      z = max(z, p.z);
-    }
-
-    Pt &limit(double c_min, double c_max) {
-      x = min(c_max, max(c_min, x));
-      y = min(c_max, max(c_min, y));
-      z = min(c_max, max(c_min, z));
-      return *this;
-    }
-
-    static bool wrap_coord(double &x, double c, double dist) {
-      bool changed = false;
-      double d = x - c;
-      if (fabs(d) > dist) {
-        d -= dist * 2. * (d>0? 1. : -1.) * ((int)(fabs(d)/(dist*2)) + 1);
-        changed = true;
-      }
-      x = d;
-      return changed;
-    }
-
-    int wrap_cube(const Pt &center, double dist) {
-      return
-        (wrap_coord(x, center.x, dist)
-         || wrap_coord(y, center.y, dist)
-         || wrap_coord(z, center.z, dist)) ? 1 : 0;
-    }
-
-    int wrap_sphere(const Pt &center, double dist) {
-      Pt d = (center - (*this));
-      if (d.len() > dist) {
-        *this += d.unit() * (dist*2);
-        return 1;
-      }
-      return 0;
-    }
-
-    double dot(const Pt &p) const
-    {
-      return
-        x * p.x + y * p.y + z * p.z;
-    }
-
-    double udot(const Pt &p) const
-    {
-      Pt u = unit();
-      Pt pu = p.unit();
-      return
-        min(1.0, max(-1.0, u.x * pu.x + u.y * pu.y + u.z * pu.z));
-    }
-
-    Pt cross(const Pt &p) const
-    {
-      return Pt(y * p.z - z * p.y,
-                z * p.x - x * p.z,
-                x * p.y - y * p.x);
-    }
-
-    double min_angle(const Pt &p) const
-    {
-      return acos(this->udot(p));
-    }
-
-    double angle(const Pt &p, const Pt &n) const
-    {
-      double ma = acos(this->udot(p));
-      if (n.udot( this->cross(p) ) < 0)
-        return - ma;
-      return ma;
-    }
-
-    Pt uv() const
-    {
-      Pt p = unit();
-      return Pt(
-                .5 + ( atan2(p.z, p.x) / (2.*M_PI) ),
-                .5 - ( asin(p.y) / M_PI ),
-                0);
-    }
-
-    Pt& operator+=(const Pt &p) {
-      x += p.x;
-      y += p.y;
-      z += p.z;
-      return *this;
-    }
-
-    Pt& operator-=(const Pt &p) {
-      x -= p.x;
-      y -= p.y;
-      z -= p.z;
-      return *this;
-    }
-
-    Pt& operator+=(const double f) {
-      x += f;
-      y += f;
-      z += f;
-      return *this;
-    }
-
-    Pt& operator-=(const double f) {
-      x -= f;
-      y -= f;
-      z -= f;
-      return *this;
-    }
-
-    Pt& operator*=(const double f) {
-      x *= f;
-      y *= f;
-      z *= f;
-      return *this;
-    }
-
-    Pt& operator/=(const double f) {
-      x /= f;
-      y /= f;
-      z /= f;
-      return *this;
-    }
-
-    Pt operator+(const Pt &p) const {
-      Pt x(*this);
-      x += p;
-      return x;
-    }
-
-    Pt operator-(const Pt &p) const {
-      Pt x(*this);
-      x -= p;
-      return x;
-    }
-
-    Pt operator*(const double f) const {
-      Pt x(*this);
-      x *= f;
-      return x;
-    }
-
-    Pt operator/(const double f) const {
-      Pt x(*this);
-      x /= f;
-      return x;
-    }
-
-    Pt operator+(const double f) const {
-      Pt x(*this);
-      x += f;
-      return x;
-    }
-
-    Pt operator-(const double f) const {
-      Pt x(*this);
-      x -= f;
-      return x;
-    }
-
-    bool operator==(const Pt& other) const {
-      return (x == other.x) && (y == other.y) && (z == other.z);
-    }
-
-    bool operator!=(const Pt& other) const {
-      return (x != other.x) || (y != other.y) || (z != other.z);
-    }
-
-    void glVertex3d() const
-    {
-      ::glVertex3d(x, y, z);
-    }
-
-    void glTranslated() const
-    {
-      ::glTranslated(x, y, z);
-    }
-
-    void glRotated() const
-    {
-      // last, turn left/right
-      if (y) {
-        ::glRotated(y * (180./M_PI), 0,1,0);
-      }
-      // second, turn nose up or down
-      if (x) {
-        ::glRotated(x * (180./M_PI), 1,0,0);
-      }
-      // first, roll left or right
-      if (z) {
-        ::glRotated(z * (180./M_PI), 0,0,1);
-      }
-    }
-
-    void glNormal() const
-    {
-      ::glNormal3d(x, y, z);
-    }
-
-
-    void glScaled() const
-    {
-      ::glScaled(x, y, z);
-    }
-
-    void glTexCoord()
-    {
-      ::glTexCoord2d(x, y);
-    }
-
-    void print() const
-    {
-      printf("x%5.2f y%5.2f z%5.2f\n", x, y, z);
-    }
-
-    Pt &operator=(double v)
-    {
-      x = y = z = v;
-      return *this;
-    }
-
-    Pt scaled(const Pt &factors) const
-    {
-      return Pt(x * factors.x, y * factors.y, z * factors.z);
-    }
-
-    Pt without(const Pt &axis) const
-    {
-      return (*this) - project(axis);
-    }
-
-    Pt project(const Pt &axis, bool neg_means_zero=true) const
-    {
-      double d = dot(axis);
-      if (neg_means_zero && (d < 0))
-        return Pt();
-      return axis * d;
-    }
-};
+#include "pt.h"
 
 struct Matrix33 {
     double a, b, c,
@@ -646,17 +273,77 @@ class Color {
 };
 
 
-class Point : public Pt{
+
+class PtGl : public Pt {
+  public:
+    PtGl() : Pt() {}
+    PtGl(const Pt &p) : Pt(p) {}
+    PtGl(double v) : Pt(v) {}
+    PtGl(double x, double y, double z=0.) : Pt(x,y,z) {}
+    PtGl& operator=(const Pt &p) {
+      Pt::operator=(p);
+      return *this;
+    }
+    PtGl &operator=(double v)
+    {
+      Pt::operator=(v);
+      return *this;
+    }
+
+    void glVertex3d() const
+    {
+      ::glVertex3d(x, y, z);
+    }
+
+    void glTranslated() const
+    {
+      ::glTranslated(x, y, z);
+    }
+
+    void glRotated() const
+    {
+      // last, turn left/right
+      if (y) {
+        ::glRotated(y * (180./M_PI), 0,1,0);
+      }
+      // second, turn nose up or down
+      if (x) {
+        ::glRotated(x * (180./M_PI), 1,0,0);
+      }
+      // first, roll left or right
+      if (z) {
+        ::glRotated(z * (180./M_PI), 0,0,1);
+      }
+    }
+
+    void glNormal() const
+    {
+      ::glNormal3d(x, y, z);
+    }
+
+
+    void glScaled() const
+    {
+      ::glScaled(x, y, z);
+    }
+
+    void glTexCoord()
+    {
+      ::glTexCoord2d(x, y);
+    }
+};
+
+class Point : public PtGl{
   public:
 
     Color c;
-    Pt t;
+    PtGl t;
 
-    Point() : Pt() {
+    Point() : PtGl() {
       c.random();
     }
 
-    Point(double x, double y, double z) : Pt(x, y, z) {
+    Point(double x, double y, double z) : PtGl(x, y, z) {
       c.random();
     }
 
@@ -675,6 +362,7 @@ class Point : public Pt{
       Pt::operator=(p);
       return *this;
     }
+
 };
 
 
@@ -763,7 +451,7 @@ void vector_rm(V &v, T &item) {
 /* Laugh if you might, yet this gives a nice overview of drawing primitives. */
 class Draw {
   public:
-    static void point(Pt &p) {
+    static void point(PtGl &p) {
       p.glVertex3d();
     }
 
@@ -780,15 +468,15 @@ class Draw {
       ::glTexCoord2d(cx, cy);
     }
 
-    static void translate(Pt &p) {
+    static void translate(PtGl &p) {
       p.glTranslated();
     }
 
-    static void rotate(Pt &p) {
+    static void rotate(PtGl &p) {
       p.glRotated();
     }
 
-    static void scale(Pt &p) {
+    static void scale(PtGl &p) {
       p.glScaled();
     }
 
@@ -874,9 +562,9 @@ class DrawBank {
       }
     }
 
-    void point(Pt &p) {
+    void point(Point &p) {
       if (point_filters.size()) {
-        Pt q = p;
+        Point q = p;
         for (int i = 0; i < point_filters.size(); i++)
           point_filters[i]->point(q);
         q.glVertex3d();
@@ -908,9 +596,9 @@ class DrawBank {
       ::glTexCoord2d(cx, cy);
     }
 
-    void translate(Pt &p, level_e l) {
+    void translate(Point &p, level_e l) {
       if (translate_filters.size()) {
-        Pt q = p;
+        Point q = p;
         for (int i = 0; i < translate_filters.size(); i++)
           translate_filters[i]->translate(q, l);
         q.glTranslated();
@@ -919,9 +607,9 @@ class DrawBank {
         p.glTranslated();
     }
 
-    void rotate(Pt &p, level_e l) {
+    void rotate(Point &p, level_e l) {
       if (rotate_filters.size()) {
-        Pt q = p;
+        Point q = p;
         for (int i = 0; i < rotate_filters.size(); i++)
           rotate_filters[i]->rotate(q, l);
         q.glRotated();
@@ -930,9 +618,9 @@ class DrawBank {
         p.glRotated();
     }
 
-    void scale(Pt &p, level_e l) {
+    void scale(Point &p, level_e l) {
       if (scale_filters.size()) {
-        Pt q = p;
+        Point q = p;
         for (int i = 0; i < scale_filters.size(); i++)
           scale_filters[i]->scale(q, l);
         q.glScaled();
@@ -1189,12 +877,11 @@ class AsTexturePlanes : public DrawAs {
 };
 
 
-
 class Placed {
   public:
-    Pt pos;
-    Pt rot3;
-    Pt scale;
+    Point pos;
+    Point rot3;
+    Point scale;
     level_e level;
 
     Placed() {

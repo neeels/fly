@@ -18,6 +18,7 @@ int H = 500;//1200;
 static AsQuads as_quads;
 static AsLines as_lines;
 
+SDL_Window *screen = NULL;
 
 bool running = true;
 volatile int frames_rendered = 0;
@@ -29,7 +30,7 @@ float want_fps = 25;
 struct Face {
   static const unsigned int N = 3;
   unsigned int point_idx[Face::N];
-  Pt n;
+  PtGl n;
 
   void set(unsigned int i0, unsigned int i1, unsigned int i2, const Pt &normal)
   {
@@ -94,7 +95,7 @@ struct Orientation {
   }
 
   void glRotated() const {
-    rot3().glRotated();
+    PtGl(rot3()).glRotated();
   }
 
   void check_normals() {
@@ -254,7 +255,7 @@ struct Orientation {
   }
 };
 
-Textures textures(5);
+Textures *gl_textures = NULL;
 
 class Visible {
   private:
@@ -266,8 +267,8 @@ class Visible {
     vector<Point> points;
     vector<Face> faces;
     Texture *texture;
-    Pt scale;
-    Pt pos;
+    PtGl scale;
+    PtGl pos;
     Orientation ori;
 
     double opacity;
@@ -445,6 +446,27 @@ class Visible {
       }
     }
 };
+
+void make_rectangle(Visible &v, bool clear=true)
+{
+  if (clear)
+    v.clear();
+
+  static double points[][3] = {
+    { .5,  .5, 0.},
+    { .5, -.5, 0.},
+    {-.5, -.5, 0.},
+    {-.5,  .5, 0.}
+  };
+
+  static unsigned int faces[][3] = {
+    {0, 1, 2},
+    {2, 3, 0}
+  };
+
+  v.load_faces(points, ARRAY_SIZE(points),
+               faces, ARRAY_SIZE(faces));
+}
 
 void make_block(Visible &v, bool clear=true)
 {
@@ -664,15 +686,22 @@ class Ufo : public Visible {
     void *user_data;
 
     Mass mass;
+    bool fixed_position;
+    bool fixed_angle;
+
+    Ufo() :
+      fixed_position(false),
+      fixed_angle(false)
+    {}
 
     bool moving(double min_len=1e-6)
     {
-      return mass.v.len() > min_len;
+      return (!fixed_position) && (mass.v.len() > min_len);
     }
 
     bool rotating(double min_len=1e-6)
     {
-      return mass.v_ang.len() > min_len;
+      return (!fixed_angle) && (mass.v_ang.len() > min_len);
     }
 
     bool animate(double min_len=1e-6)
@@ -681,12 +710,21 @@ class Ufo : public Visible {
     }
 
     virtual void step() {
-      pos += mass.v * dt;
-      ori.rotate_e(mass.v_ang * dt);
+      if (!fixed_position)
+        pos += mass.v * dt;
+      if (!fixed_angle)
+        ori.rotate_e(mass.v_ang * dt);
     };
 
     bool collide(Ufo &o)
     {
+      if (fixed_position) {
+        if (o.fixed_position)
+          return false;
+        // make sure the fixed_position one is always the other one.
+        return o.collide(*this);
+      }
+
       if (!radius_overlaps(o))
         return false;
 
@@ -710,10 +748,13 @@ class Ufo : public Visible {
       Pt J = n * (2.* (mass.v - o.mass.v).project(n).len() / (1./mass.m + 1./o.mass.m));
 
       mass.v -= J / mass.m;
-      o.mass.v += J / o.mass.m;
-
       mass.v *= .59;
-      o.mass.v *= .59;
+
+      if (! o.fixed_position) {
+        o.mass.v += J / o.mass.m;
+        o.mass.v *= .59;
+      }
+
       /*
       printf("J\t"); J.print();
       Pt i2 = mass.impulse() + o.mass.impulse();
@@ -732,8 +773,12 @@ class Ufo : public Visible {
       printf("at\t");at.print();
       printf("o.pos\t");o.pos.print();
 */
-      pos = at - n * (1.01 * radius());
-      o.pos = at + n * (1.01 * o.radius());
+      if (!o.fixed_position) {
+        pos = at - n * (1.01 * radius());
+        o.pos = at + n * (1.01 * o.radius());
+      }
+      else
+        pos = at - n * (2.02 * radius());
 
       return true;
     }
@@ -741,15 +786,16 @@ class Ufo : public Visible {
     void play_bump(double vol=1) const
     {
       double v = max(.01, scale.volume());
-      double dens = max(.05, min(10., sqrt(mass.m / v))) * frandom(.9, 1.1);
+      double dens = sqrt(mass.m / v);
       double l = scale.len();
+      double r = frandom(.95, 1.05);
 
       Mix *m = new Mix();
-      m->add(new Sine(dens*100./max(.01,scale.x/l), vol, frandom()*2.*M_PI));
-      m->add(new Sine(dens*100./max(.01,scale.y/l), vol, frandom()*2.*M_PI));
-      m->add(new Sine(dens*100./max(.01,scale.z/l), vol, frandom()*2.*M_PI));
+      m->add(new Sine(r*octave(128.*dens / max(.01, scale.x/l), 2, 220), vol, frandom()*2.*M_PI));
+      m->add(new Sine(r*octave(128.*dens / max(.01, scale.y/l), 2, 220), vol, frandom()*2.*M_PI));
+      m->add(new Sine(r*octave(128.*dens / max(.01, scale.z/l), 2, 220), vol, frandom()*2.*M_PI));
 
-      Audio.play(new Envelope(max(.01,.02/dens), max(.01,.03/dens), max(.01,1./dens), m));
+      Audio.play(new Envelope(.01/r, .01/r, frandom(0.1, .2), m));
     }
 };
 
@@ -785,8 +831,8 @@ class Backdrop : public Visible {
         p->x = - p->x;
       }
 
-      // wrap texture coordinates
       foreach (f, faces) {
+        // wrap texture coordinates
         Point &p0 = points[f->point_idx[0]];
 
         for (int pi = 1; pi < Face::N; pi++) {
@@ -801,10 +847,34 @@ class Backdrop : public Visible {
             f->point_idx[pi] = new_idx;
           }
         }
+
+        // fix top/bottom u s (v = 0 or v = 1)
+        for (int pi = 0; pi < Face::N; pi++) {
+          Point &p = points[f->point_idx[pi]];
+
+          if ((p.t.y < (1. - 1e-6)) && (p.t.y > 1.e-6))
+            continue;
+
+          //printf("\n  p.t "); p.t.print();
+
+          double u_avg = 0.;
+          for (int pj = 0; pj < Face::N; pj++) {
+            if (pj == pi)
+              continue;
+            Point &q = points[f->point_idx[pj]];
+            //q.t.print();
+            u_avg += q.t.x;
+          }
+          u_avg /= Face::N - 1;
+
+          p.t.x = u_avg;
+          //printf("=> p.t "); p.t.print();
+          //printf("\n");
+        }
       }
 
-      //texture = textures.load("backdrop.jpg");
-      //texture = textures.load("test_backdrop.png");
+      //texture = gl_textures->load("backdrop.jpg");
+      //texture = gl_textures->load("test_backdrop.png");
     }
 };
 
@@ -827,13 +897,13 @@ class Fly : public Ufo {
 
   double engines_strength;
 
-	Fly() : Ufo() {
+  Fly() : Ufo() {
     ori.nose.set(0, 0, -1);
     ori.top.set(0, 1, 0);
     top_lag = ori.top;
-    roll_x.slew = .94;
-    roll_y.slew = .94;
-    roll_z.slew = .94;
+    roll_x.slew = .8;
+    roll_y.slew = .8;
+    roll_z.slew = .8;
     propulsion_forward.slew = .1;
     propulsion_break.slew = .1;
     cruise_v.slew = 0;
@@ -860,7 +930,7 @@ class Fly : public Ufo {
         p.y = max(min(p.y, .03), -.03);
       }
     }
-	}
+  }
 
   void clear()
   {
@@ -944,6 +1014,13 @@ struct Camera {
   void look_at(const Pt &look_at, const Pt &from_rel, const Pt &top) {
     at = look_at;
     from = at + from_rel;
+    this->top = top;
+    backdrop.pos = from;
+  }
+
+  void look(const Pt &pos, const Pt &nose, const Pt &top) {
+    at = pos + nose;
+    from = pos;
     this->top = top;
     backdrop.pos = from;
   }
@@ -1215,7 +1292,7 @@ class Game {
     virtual void init_params()
     {
       level = max(0, 101 + level) % 101;
-      printf("L %d\n", level);
+      printf("Level %d\n", level);
     }
 
     /* Set up local objects and settings for set difficulty level. */
@@ -1223,13 +1300,13 @@ class Game {
     {
       init_params();
       won = 0;
-      init_gl();
     }
 
     /* Clear out the world, then link everything in place. */
     virtual void play()
     {
       done = false;
+      init_gl();
     }
 
     virtual void step() = 0;
@@ -1266,55 +1343,42 @@ class Game {
     }
 
 
-    void draw_scene()
+    virtual void draw_scene()
     {
-      glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
-
-
-      glLoadIdentity( );
-      
-      cam.gluLookAt();
-
-      glDisable(GL_LIGHTING);
-      glDisable(GL_DEPTH_TEST);
-      cam.backdrop.draw();
-      glEnable(GL_DEPTH_TEST);
-      glEnable(GL_LIGHTING);
-
       world.draw();
 
       if (redraw_dist > .1) {
         Pt dir = cam.at - cam.from;
-        Pt p[] = {
-          Pt(-redraw_dist, -redraw_dist, -redraw_dist),
-          Pt(           0, -redraw_dist, -redraw_dist),
-          Pt( redraw_dist, -redraw_dist, -redraw_dist),
-          Pt(-redraw_dist,            0, -redraw_dist),
-          Pt(           0,            0, -redraw_dist),
-          Pt( redraw_dist,            0, -redraw_dist),
-          Pt(-redraw_dist,  redraw_dist, -redraw_dist),
-          Pt(           0,  redraw_dist, -redraw_dist),
-          Pt( redraw_dist,  redraw_dist, -redraw_dist),
+        PtGl p[] = {
+          PtGl(-redraw_dist, -redraw_dist, -redraw_dist),
+          PtGl(           0, -redraw_dist, -redraw_dist),
+          PtGl( redraw_dist, -redraw_dist, -redraw_dist),
+          PtGl(-redraw_dist,            0, -redraw_dist),
+          PtGl(           0,            0, -redraw_dist),
+          PtGl( redraw_dist,            0, -redraw_dist),
+          PtGl(-redraw_dist,  redraw_dist, -redraw_dist),
+          PtGl(           0,  redraw_dist, -redraw_dist),
+          PtGl( redraw_dist,  redraw_dist, -redraw_dist),
 
-          Pt(-redraw_dist, -redraw_dist,            0),
-          Pt(           0, -redraw_dist,            0),
-          Pt( redraw_dist, -redraw_dist,            0),
-          Pt(-redraw_dist,            0,            0),
+          PtGl(-redraw_dist, -redraw_dist,            0),
+          PtGl(           0, -redraw_dist,            0),
+          PtGl( redraw_dist, -redraw_dist,            0),
+          PtGl(-redraw_dist,            0,            0),
 
-          Pt( redraw_dist,            0,            0),
-          Pt(-redraw_dist,  redraw_dist,            0),
-          Pt(           0,  redraw_dist,            0),
-          Pt( redraw_dist,  redraw_dist,            0),
+          PtGl( redraw_dist,            0,            0),
+          PtGl(-redraw_dist,  redraw_dist,            0),
+          PtGl(           0,  redraw_dist,            0),
+          PtGl( redraw_dist,  redraw_dist,            0),
 
-          Pt(-redraw_dist, -redraw_dist,  redraw_dist),
-          Pt(           0, -redraw_dist,  redraw_dist),
-          Pt( redraw_dist, -redraw_dist,  redraw_dist),
-          Pt(-redraw_dist,            0,  redraw_dist),
-          Pt(           0,            0,  redraw_dist),
-          Pt( redraw_dist,            0,  redraw_dist),
-          Pt(-redraw_dist,  redraw_dist,  redraw_dist),
-          Pt(           0,  redraw_dist,  redraw_dist),
-          Pt( redraw_dist,  redraw_dist,  redraw_dist),
+          PtGl(-redraw_dist, -redraw_dist,  redraw_dist),
+          PtGl(           0, -redraw_dist,  redraw_dist),
+          PtGl( redraw_dist, -redraw_dist,  redraw_dist),
+          PtGl(-redraw_dist,            0,  redraw_dist),
+          PtGl(           0,            0,  redraw_dist),
+          PtGl( redraw_dist,            0,  redraw_dist),
+          PtGl(-redraw_dist,  redraw_dist,  redraw_dist),
+          PtGl(           0,  redraw_dist,  redraw_dist),
+          PtGl( redraw_dist,  redraw_dist,  redraw_dist),
         };
 
         for (int i = 0; i < ARRAY_SIZE(p); i++) {
@@ -1330,12 +1394,25 @@ class Game {
 
     void draw()
     {
+      glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
+
+
+      glLoadIdentity( );
+      
+      cam.gluLookAt();
+
+      glDisable(GL_LIGHTING);
+      //glDisable(GL_DEPTH_TEST);
+      cam.backdrop.draw();
+      //glEnable(GL_DEPTH_TEST);
       glEnable(GL_LIGHTING);
+
       draw_scene();
+
       glDisable(GL_LIGHTING);
       osd_draw();
       glFlush();
-      SDL_GL_SwapBuffers();
+      SDL_GL_SwapWindow(screen);
     }
 
     void collide() {
@@ -1358,6 +1435,7 @@ class BlockSpace : public Game {
     double r_action;
     double max_block_size;
     unsigned int blocks_count;
+    double reverse_roll_x;
 
     double v_drag;
     double v_ang_drag;
@@ -1370,9 +1448,10 @@ class BlockSpace : public Game {
         r_wrap(30),
         r_action(10),
         max_block_size(2),
-        blocks_count(23)
+        blocks_count(23),
+        reverse_roll_x(1.)
     {
-      //redraw_dist = world_r * 2.;//10.0;
+        r_visible = 1000;
     }
 
     virtual void init_params()
@@ -1382,8 +1461,7 @@ class BlockSpace : public Game {
       v_drag = 0;
       v_ang_drag = 0;
 
-      r_wrap = 10. * r_action;
-      r_visible = 1000;
+      r_wrap = 3. * r_action;
 
       blocks_count = (1./3) * (r_action * r_action * r_action) / (max_block_size * max_block_size * max_block_size);
 
@@ -1468,6 +1546,7 @@ class BlockSpace : public Game {
                   dir.unit() * (-3),
                   fly.top_lag);
 
+      //cam.backdrop.pos = world.wrap_ofs * -1;
       osd_update();
     }
 
@@ -1524,17 +1603,17 @@ class BlockSpace : public Game {
         break;
 
       case 0:
-        fly.roll_y = -(axis_val*axis_val*axis_val) / 5;
-        fly.roll_z = (axis_val*axis_val*axis_val) / 50;
+        fly.roll_y = -(axis_val*axis_val*axis_val) / 10;
+        fly.roll_z = (axis_val*axis_val*axis_val) / 100;
         break;
 
       case 1:
       case 4:
-        fly.roll_x = (axis_val*axis_val*axis_val) / 5;
+        fly.roll_x = reverse_roll_x * (axis_val*axis_val*axis_val) / 12;
         break;
 
       case 3:
-        fly.roll_z = (axis_val*axis_val*axis_val) / 5;
+        fly.roll_z = (axis_val*axis_val*axis_val) / 10;
         break;
 
       case 5:
@@ -1583,6 +1662,13 @@ class BlockSpace : public Game {
           fly.play_bump(1.);
         break;
 
+      case 6:
+        if (down) {
+          reverse_roll_x = (reverse_roll_x > 0)? -1. : 1.;
+          printf("roll_x %f\n", reverse_roll_x);
+        }
+        break;
+
       default:
         printf("button %d\n", button);
         break;
@@ -1595,32 +1681,32 @@ class BlockSpace : public Game {
       case SDLK_UP:
       case 'w':
       case 'k':
-        fly.roll_x = down? -.2 : 0;
+        fly.roll_x = down? -.1 : 0;
         break;
 
       case SDLK_LEFT:
       case 'a':
       case 'h':
-        fly.roll_y = down? .2 : 0;
+        fly.roll_y = down? .1 : 0;
         break;
 
       case SDLK_DOWN:
       case 's':
       case 'j':
-        fly.roll_x = down? .2 : 0;
+        fly.roll_x = down? .1 : 0;
         break;
 
       case SDLK_RIGHT:
       case 'd':
       case 'l':
-        fly.roll_y = down? -.2 : 0;
+        fly.roll_y = down? -.1 : 0;
         break;
 
       case 'q':
-        fly.roll_z = down? -.2 : 0;
+        fly.roll_z = down? -.1 : 0;
         break;
       case 'e':
-        fly.roll_z = down? .2 : 0;
+        fly.roll_z = down? .1 : 0;
         break;
 
       case SDLK_PAGEUP:
@@ -1634,6 +1720,7 @@ class BlockSpace : public Game {
       case SDLK_PAGEDOWN:
       case '-':
       case 'b':
+      case '2':
         fly.propulsion_break = down? 1 : 0;
         break;
 
@@ -1657,6 +1744,7 @@ class MoveAllBlocks : public BlockSpace {
     {
       r_action = 5. + .3 * level;
       BlockSpace::init_params();
+      redraw_dist = r_wrap * 2;
 
       if (level == 0) {
         blocks_count = 2;
@@ -1827,9 +1915,10 @@ class TurnAllOn : public BlockSpace {
     {
       r_action = 5. + .3 * level;
       BlockSpace::init_params();
+      redraw_dist = r_wrap * 2;
 
       if (level == 0) {
-        blocks_count = 2;
+        blocks_count = 1;
         v_drag = .01;
       }
       else {
@@ -1838,6 +1927,7 @@ class TurnAllOn : public BlockSpace {
         blocks_count = min(blocks_count, (unsigned int)3 * level);
       }
       fly_starts_on = ! (blocks_count & 1);
+
     }
 
     virtual void init()
@@ -1859,7 +1949,7 @@ class TurnAllOn : public BlockSpace {
         Ufo &b = debris[i];
 
         if (i == 0) {
-          b.pos.set(0, 0, -5);
+          b.pos.set(4, 0, 14);
           b.scale = 1.0;
           b.mass.m = 1;
         }
@@ -1876,15 +1966,19 @@ class TurnAllOn : public BlockSpace {
           b.mass.m = 1.5;
         }
 
-        b.scale = 1;
+        b.scale = 3;
+        b.mass.m = 200;
         b.ori.clear();
         //else
          // break;
       }
 
       cam.backdrop.color_scheme(Pt(1), 0);
-      cam.backdrop.texture = textures.load("backdrop_siegessaeule.jpg");
-      //cam.backdrop.texture = textures.load("backdrop.jpg");
+      cam.backdrop.texture = gl_textures->load("backdrop.jpg");
+      if (cam.backdrop.texture)
+        cam.backdrop.color_scheme(Pt(1), 0);
+      else
+        cam.backdrop.color_scheme(Pt(.0, 0.02, 0.05));
     }
 
     virtual void play()
@@ -2023,14 +2117,9 @@ class FindTheLight : public BlockSpace {
       m.scale = 1;
       m.pos = absolute_light_pos;
       m.color_scheme(Pt(1), 0);
+      m.fixed_position = true;
 
-      cam.backdrop.texture = textures.load("backdrop.jpg");
-      //cam.backdrop.texture = textures.load("test_backdrop.png");
-
-      if (cam.backdrop.texture)
-        cam.backdrop.color_scheme(Pt(1), 0);
-      else
-        cam.backdrop.color_scheme(Pt(.05));
+      cam.backdrop.color_scheme(Pt(.0, 0.02, 0.05));
     }
 
     virtual void add_lights()
@@ -2081,15 +2170,14 @@ class FindTheLight : public BlockSpace {
       BlockSpace::step();
 
       Ufo &m = marker();
-
       m.pos = world.relative_pos(absolute_light_pos);
-      m.mass.v = 0;
 
       double d = (m.pos - cam.from).len();
       m.opacity = 3. - 2. * (1. + .2 * sqrt(level)) * d / r_wrap;
     }
 
 };
+
 
 class Games {
   public:
@@ -2147,9 +2235,6 @@ class Games {
 };
 
 char *audio_path = NULL;
-
-SDL_Surface *screen = NULL;
-
 
 typedef struct {
   int random_seed;
@@ -2269,20 +2354,35 @@ int main(int argc, char *argv[])
 
   SDL_Event event;
 
-  SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_JOYSTICK);
+  int rc = SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_JOYSTICK | SDL_INIT_EVENTS);
+  Pi(rc);
 
-  const int n_joysticks = SDL_NumJoysticks();
+  atexit(SDL_Quit);
+
+  screen = SDL_CreateWindow("Fly",
+                            SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+                            W, H,
+                            SDL_WINDOW_OPENGL);
+  SDL_GLContext gl_ctx = SDL_GL_CreateContext(screen);
+
+  SDL_ShowCursor(SDL_DISABLE);
+
+  SDL_JoystickUpdate();
+  SDL_JoystickEventState(SDL_ENABLE);
+
+  int n_joysticks = SDL_NumJoysticks();
   SDL_Joystick **joysticks = NULL;
 
+  printf("%d joysticks\n", n_joysticks);
+
   if (n_joysticks) {
-    SDL_JoystickEventState(SDL_ENABLE);
 
     joysticks = (SDL_Joystick**)malloc(sizeof(SDL_Joystick*) * n_joysticks);
     
     int i;
     for (i = 0; i < n_joysticks; i++)
     {
-      printf("%2d: '%s'\n", i, SDL_JoystickName(i));
+      printf("%2d: '%s'\n", i, SDL_JoystickName(joysticks[i]));
 
       SDL_Joystick *j = SDL_JoystickOpen(i);
       printf("    %d buttons  %d axes  %d balls %d hats\n",
@@ -2295,14 +2395,15 @@ int main(int argc, char *argv[])
     }
   }
 
-  atexit(SDL_Quit);
-  SDL_WM_SetCaption("fly", NULL);
-  screen = SDL_SetVideoMode(W,H, 32, SDL_OPENGL);// | SDL_FULLSCREEN);
-  SDL_ShowCursor(SDL_DISABLE);
-
-
   printf("seed %d\n", (int)ip.random_seed);
   srandom(ip.random_seed);
+
+  int maxTextureSize;
+  glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
+  printf("max texture size: %d\n", maxTextureSize);
+
+  Textures _textures(20);
+  gl_textures = &_textures;
 
   Audio.start();
   //Audio.play(new Sine(140, 0.01));
@@ -2405,9 +2506,16 @@ int main(int argc, char *argv[])
               running = false;
               break;
 
-            case 'f':
             case 13:
-              SDL_WM_ToggleFullScreen(screen);
+              {
+                static bool is_fullscreen = false;
+                is_fullscreen = ! is_fullscreen;
+                SDL_SetWindowFullscreen(screen,
+                                        is_fullscreen?
+                                          SDL_WINDOW_FULLSCREEN
+                                          : 0
+                                       );
+              }
               break;
 
             case SDLK_TAB:
