@@ -841,8 +841,8 @@ FILE *in_params = NULL;
 
 char *audio_path = NULL;
 
-int W = 1920;
-int H = 1080;
+int W = 1024;
+int H = 768;
 
 SDL_Surface *screen = NULL;
 
