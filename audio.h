@@ -104,7 +104,7 @@ public:
   
   _Audio() :
      is_on(false),
-     buf_len(1024),
+     buf_len(4096),
      freq(44100),
      write_to_path(NULL),
      write_to_f(NULL),
