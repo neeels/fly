@@ -1654,18 +1654,28 @@ class BlockSpace : public Game {
         printf("%d %f\n", axis, (float)axis_val);
         break;
 
-      case 0:
+      case 3:
         fly.roll_y = -(axis_val*axis_val*axis_val) / 10;
         fly.roll_z = (axis_val*axis_val*axis_val) / 100;
         break;
 
-      case 1:
       case 4:
         fly.roll_x = reverse_roll_x * (axis_val*axis_val*axis_val) / 12;
         break;
 
-      case 3:
+      case 0:
         fly.roll_z = (axis_val*axis_val*axis_val) / 10;
+        break;
+
+      case 1:
+        if (axis_val < 0) {
+          fly.propulsion_forward = fabs(axis_val);
+          fly.propulsion_break = 0;
+        }
+        else {
+          fly.propulsion_forward = 0;
+          fly.propulsion_break = fabs(axis_val);
+        }
         break;
 
       case 5:
