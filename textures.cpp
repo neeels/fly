@@ -82,6 +82,12 @@ bool Texture::load(GLuint id, const char *path, bool use_mip_map)
   loaded = true;
 }
 
+void Texture::unload()
+{
+  this->loaded = false;
+}
+
+
 Textures::Textures(int n)
 {
 	printf("Initializing %d textures\n", n);

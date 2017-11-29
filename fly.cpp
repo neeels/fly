@@ -3,6 +3,8 @@ int H = 768;
 
 #include <stdlib.h>
 #include <time.h>
+#include <sys/types.h>
+#include <dirent.h>
 
 #define DRAW_SPHERES 0
 #if DRAW_SPHERES
@@ -421,6 +423,13 @@ class Visible {
     Pt face_center(unsigned int face_idx) const
     {
       return face_center(faces[face_idx]);
+    }
+
+    void load_texture(Textures *textures, const char *path)
+    {
+      if (this->texture)
+        this->texture->unload();
+      this->texture = textures->load(path);
     }
 
   private:
@@ -872,9 +881,49 @@ class Backdrop : public Visible {
           //printf("\n");
         }
       }
+    }
 
-      //texture = gl_textures->load("backdrop.jpg");
-      //texture = gl_textures->load("test_backdrop.png");
+    void pick_random_backdrop()
+    {
+      DIR *d;
+      struct dirent *dir;
+      const char *backdrops_dir = "backdrops";
+
+      // count
+      int entries = 0;
+      d = opendir(backdrops_dir);
+      if (d)
+      {
+        while ((dir = readdir(d)) != NULL) {
+          if (!strcmp(dir->d_name, ".")
+              || !strcmp(dir->d_name, ".."))
+            continue;
+          entries ++;
+        }
+        closedir(d);
+      }
+
+      // pick
+      int entry = random() % entries;
+      entries = 0;
+      d = opendir(backdrops_dir);
+      if (d)
+      {
+        while ((dir = readdir(d)) != NULL) {
+          if (!strcmp(dir->d_name, ".")
+              || !strcmp(dir->d_name, ".."))
+            continue;
+          if (entries == entry) {
+            char name[512];
+            snprintf(name, sizeof(name), "%s/%s", backdrops_dir, dir->d_name);
+            printf("loading %s\n", name);
+            load_texture(gl_textures, name);
+            break;
+          }
+          entries ++;
+        }
+        closedir(d);
+      }
     }
 };
 
@@ -1472,8 +1521,11 @@ class BlockSpace : public Game {
     {
       Game::init();
       make_blocks();
-      cam.backdrop.color_scheme(Pt(0x7f, 0xbf, 0xff)/255);
-      cam.backdrop.texture = NULL;
+      cam.backdrop.pick_random_backdrop();
+      if (cam.backdrop.texture)
+        cam.backdrop.color_scheme(Pt(1), 0);
+      else
+        cam.backdrop.color_scheme(Pt(0x7f, 0xbf, 0xff)/255);
     }
 
     void make_blocks()
@@ -1772,6 +1824,11 @@ class MoveAllBlocks : public BlockSpace {
 
         color_grey(b, .1);
       }
+
+      if (cam.backdrop.texture)
+        cam.backdrop.color_scheme(Pt(1), 0);
+      else
+        cam.backdrop.color_scheme(Pt(.0, 0.02, 0.05));
     }
 
     virtual void play()
@@ -1973,8 +2030,6 @@ class TurnAllOn : public BlockSpace {
          // break;
       }
 
-      cam.backdrop.color_scheme(Pt(1), 0);
-      cam.backdrop.texture = gl_textures->load("backdrop.jpg");
       if (cam.backdrop.texture)
         cam.backdrop.color_scheme(Pt(1), 0);
       else
@@ -2119,7 +2174,10 @@ class FindTheLight : public BlockSpace {
       m.color_scheme(Pt(1), 0);
       m.fixed_position = true;
 
-      cam.backdrop.color_scheme(Pt(.0, 0.02, 0.05));
+      if (cam.backdrop.texture)
+        cam.backdrop.color_scheme(Pt(1), 0);
+      else
+        cam.backdrop.color_scheme(Pt(.0, 0.02, 0.05));
     }
 
     virtual void add_lights()
