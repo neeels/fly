@@ -5,7 +5,7 @@ run: fly
 	./run_fly.sh
 	#./fly -g 1920x900
 
-F = -g -std=c++11
+F = -g -O2 -std=c++11
 
 scop3: scop3.cpp palettes.h palettes.o ctrl_layers.h
 	g++ $F -o scop3 scop3.cpp palettes.o -lGL -lGLU -lSDL2 -lm
@@ -17,7 +17,7 @@ fly: fly.cpp palettes.h palettes.o ctrl_layers.h textures.o font.h draw.h foreac
 	g++ $F -g -o fly fly.cpp palettes.o textures.o -lGL -lGLU -lglut -lSDL2 -lSDL2_image -lm 
   
 palettes.o: palettes.h palettes.c
-	gcc $F -c -o palettes.o palettes.c
+	gcc -g -O2 -c -o palettes.o palettes.c
 
 %.o: %.cpp
 	g++ $F -c $< 
@@ -29,7 +29,7 @@ litsphere: litsphere.c
 	gcc -o litsphere litsphere.c -lGL -lGLU -lglut
 
 clean:
-	rm *.o
+	rm *.o fly scop3
 
 # vim: noexpandtab
 
