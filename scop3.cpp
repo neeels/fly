@@ -1,5 +1,5 @@
 
-#include <SDL/SDL.h>
+#include <SDL2/SDL.h>
 #include <GL/gl.h>
 #include <GL/glu.h>
 #include <cstdlib>
@@ -19,6 +19,7 @@ using namespace std;
 
 #define Pf(V) printf(#V "=%f\n", (float)V)
 
+SDL_Window *window = NULL;
 
 void draw_scene();
 
@@ -830,7 +831,7 @@ void draw_scene()
   }
 
   glFlush();
-  SDL_GL_SwapBuffers();
+  SDL_GL_SwapWindow(window);
 }
 
 
@@ -1011,6 +1012,7 @@ int main(int argc, char *argv[])
 {
   bool usage = false;
   bool error = false;
+  bool fullscreen = false;
 
   int c;
 
@@ -1021,7 +1023,7 @@ int main(int argc, char *argv[])
   ip.random_seed = time(NULL);
 
   while (1) {
-    c = getopt(argc, argv, "hf:g:r:p:i:o:O:");
+    c = getopt(argc, argv, "hf:g:r:p:i:o:O:F");
     if (c == -1)
       break;
    
@@ -1044,6 +1046,10 @@ int main(int argc, char *argv[])
             exit(-1);
           }
         }
+        break;
+
+      case 'F':
+        fullscreen = true;
         break;
 
       case 'f':
@@ -1095,6 +1101,7 @@ int main(int argc, char *argv[])
 "\n"
 "  -g WxH   Set window width and height in number of pixels.\n"
 "           Default is '-g %dx%d'.\n"
+"  -F       Start in fullscreen mode.\n"
 "  -f fps   Set desired framerate to <fps> frames per second. The framerate\n"
 "           may slew if your system cannot calculate fast enough.\n"
 "           If zero, run as fast as possible. Default is %.1f.\n"
@@ -1138,7 +1145,7 @@ int main(int argc, char *argv[])
     int i;
     for (i = 0; i < n_joysticks; i++)
     {
-      printf("%2d: '%s'\n", i, SDL_JoystickName(i));
+      printf("%2d: '%s'\n", i, SDL_JoystickNameForIndex(i));
 
       SDL_Joystick *j = SDL_JoystickOpen(i);
       printf("    %d buttons  %d axes  %d balls %d hats\n",
@@ -1152,8 +1159,15 @@ int main(int argc, char *argv[])
   }
 
   atexit(SDL_Quit);
-  SDL_WM_SetCaption("SCOP3", NULL);
-  screen = SDL_SetVideoMode(W,H, 32, SDL_OPENGL | SDL_FULLSCREEN);
+  window = SDL_CreateWindow("SCOP3",
+                            SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+                            W, H,
+                            SDL_WINDOW_OPENGL);
+  SDL_GLContext gl_ctx = SDL_GL_CreateContext(window);
+
+  if (fullscreen)
+    SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN);
+
   SDL_ShowCursor(SDL_DISABLE);
 
   glMatrixMode( GL_PROJECTION );
@@ -1255,9 +1269,13 @@ int main(int argc, char *argv[])
                   running = false;
                   break;
 
-                  case 13:
-                    SDL_WM_ToggleFullScreen(screen);
-                    break;
+                case 13:
+                  fullscreen = !fullscreen;
+                  if (fullscreen)
+                    SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN);
+                  else
+                    SDL_SetWindowFullscreen(window, 0);
+                  break;
               }
             }
             break;
