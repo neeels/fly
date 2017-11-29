@@ -1252,6 +1252,11 @@ int main(int argc, char *argv[])
         switch(event.type)
         {
           default:
+            if (event.type == SDL_JOYBUTTONDOWN
+                && event.jbutton.button == 7) {
+              running = false;
+              break;
+            }
             handle_joystick_events(event);
             break;
 

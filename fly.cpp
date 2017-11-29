@@ -2278,10 +2278,11 @@ class Games {
       game().play();
     }
 
-    void next_game()
+    int next_game()
     {
       active_idx = (active_idx + 1) % games.size();
       game().play();
+      return active_idx;
     }
 
     void prev_game()
@@ -2547,17 +2548,25 @@ int main(int argc, char *argv[])
 
 
         case SDL_JOYBUTTONDOWN:
-          if (event.jbutton.button == 4) {
+          switch (event.jbutton.button) {
+          case 4:
             games.prev_game();
             break;
-          }
-          if (event.jbutton.button == 5) {
+          case 5:
             games.next_game();
-          }
-          if (event.jbutton.button == 7) {
+            break;
+          case 6:
             games.game().init();
             games.game().play();
+            break;
+          case 7:
+            // cycle through all games, then exit
+            if (!games.next_game())
+              running = false;
+            break;
           }
+          break;
+
         case SDL_JOYBUTTONUP:
           games.game().on_joy_button(event.jbutton.button,
                                      event.type == SDL_JOYBUTTONDOWN);
