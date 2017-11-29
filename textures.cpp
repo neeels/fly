@@ -90,7 +90,7 @@ void Texture::unload()
 
 Textures::Textures(int n)
 {
-	printf("Initializing %d textures\n", n);
+  printf("Initializing %d textures\n", n);
   textures.resize(n);
   GLuint id[n];
   glGenTextures(n, id);
@@ -102,23 +102,23 @@ Textures::Textures(int n)
 
 Texture *Textures::load(const char *path)
 {
-	static int out_of_textures = 0;
+  static int out_of_textures = 0;
   Texture *first_empty = NULL;
 
-	if (!out_of_textures) { // HACK only when sure that no texture is used twice
-  foreach(t, textures) {
-    if (!(t->loaded)) {
-      if (! first_empty)
-        first_empty = &(*t);
-      continue;
+  if (!out_of_textures) { // HACK only when sure that no texture is used twice
+    foreach(t, textures) {
+      if (!(t->loaded)) {
+        if (! first_empty)
+          first_empty = &(*t);
+        continue;
+      }
+      if ((*t) == path)
+        return &(*t);
     }
-    if ((*t) == path)
-      return &(*t);
   }
-	}
 
   if (! first_empty) {
-		out_of_textures ++;
+    out_of_textures ++;
     printf("Out of textures! (%d + %d)\n", textures.size(), out_of_textures);
     return NULL;
   }
