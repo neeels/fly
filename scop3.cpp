@@ -844,28 +844,6 @@ char *audio_path = NULL;
 int W = 1024;
 int H = 768;
 
-SDL_Surface *screen = NULL;
-
-SDL_sem *please_save;
-SDL_sem *saving_done;
-
-int save_thread(void *arg) {
-
-  for (;;) {
-    SDL_SemWait(please_save);
-    if (! running)
-      break;
-
-    if (out_stream) {
-      fwrite(screen->pixels, sizeof(Uint32), W * H, out_stream);
-    }
-    SDL_SemPost(saving_done);
-  }
-
-  return 0;
-}
-
-
 void on_joy_axis(ControllerState &ctrl, int axis, double axis_val) {
   switch(ctrl.selected_layer) {
     default:
@@ -1205,13 +1183,6 @@ int main(int argc, char *argv[])
   double alpha = 0;
   double want_alpha = 0;
   */
-
-  please_save = SDL_CreateSemaphore(0);
-  saving_done = SDL_CreateSemaphore(1);
-
-  SDL_Thread *save_thread_token = NULL;
-  //if (out_stream)
-  //  SDL_CreateThread(save_thread, NULL);
 
   float want_frame_period = (want_fps > .1? 1000. / want_fps : 0);
   float last_ticks = (float)SDL_GetTicks() - want_frame_period;
