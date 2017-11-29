@@ -1,10 +1,9 @@
 
+default: scop3 fly
+
 run: fly
 	./run_fly.sh
 	#./fly -g 1920x900
-
-
-default: t1 t2 scop3 t fly
 
 F = -g -std=c++11
 
